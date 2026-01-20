@@ -1,7 +1,7 @@
 
 import React from 'react';
-import { ViewState, Language, UserProfile } from '../types';
-import { translations } from '../translations';
+import { ViewState, Language, UserProfile } from '@/types';
+import { translations } from '@/translations';
 
 interface HeaderProps {
   setView: (view: ViewState) => void;
