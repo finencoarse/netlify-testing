@@ -23,6 +23,78 @@ export class GeminiService {
   }
 
   /**
+   * Translates the text content of a trip to the target language.
+   */
+  static async translateTrip(trip: Trip, language: string): Promise<Trip | null> {
+    this.incrementUsage();
+    try {
+      const ai = this.getClient();
+      
+      const languageNames: Record<string, string> = {
+        'en': 'English',
+        'zh-TW': 'Traditional Chinese',
+        'ja': 'Japanese',
+        'ko': 'Korean'
+      };
+      const targetLanguage = languageNames[language] || 'English';
+
+      // We strip out heavy fields (photos, comments) to save tokens and ensure JSON stability
+      const minimalTrip = {
+        title: trip.title,
+        location: trip.location,
+        description: trip.description,
+        itinerary: trip.itinerary
+      };
+
+      const prompt = `
+      Translate the following JSON object's text values to ${targetLanguage}.
+      
+      Rules:
+      1. Preserve the JSON structure EXACTLY.
+      2. Only translate values for the keys: "title", "description", "location", "transportMethod", "spendingDescription".
+      3. Do NOT translate IDs, times, numbers, or currency codes.
+      4. Keep the tone inspiring and travel-focused.
+      
+      Input JSON:
+      ${JSON.stringify(minimalTrip)}
+      
+      Return ONLY the valid JSON. No markdown.
+      `;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        }
+      });
+
+      const text = response.text;
+      if (!text) return null;
+
+      let cleanJson = text.trim();
+      if (cleanJson.startsWith('```json')) {
+        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
+      }
+
+      const translatedData = JSON.parse(cleanJson);
+
+      // Merge translated data back into original trip
+      return {
+        ...trip,
+        title: translatedData.title || trip.title,
+        location: translatedData.location || trip.location,
+        description: translatedData.description || trip.description,
+        itinerary: translatedData.itinerary || trip.itinerary
+      };
+
+    } catch (e) {
+      console.error("Translation failed:", e);
+      return null;
+    }
+  }
+
+  /**
    * Fetches the exchange rate between two currencies for a specific date using Google Search.
    */
   static async getExchangeRate(fromCurrency: string, toCurrency: string, date?: string): Promise<number | null> {
@@ -185,6 +257,80 @@ export class GeminiService {
     } catch (error) {
       console.error('Error with Maps grounding:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Researches logistics for a specific event: ticket prices and transport.
+   */
+  static async getEventLogistics(location: string, item: ItineraryItem, prevLocation: string | null, language: string = 'en'): Promise<{ price?: number, currency?: string, transportShort?: string, details?: string } | null> {
+    this.incrementUsage();
+    try {
+      const ai = this.getClient();
+      const origin = prevLocation ? `from "${prevLocation}"` : 'from the city center';
+      
+      const languageNames: Record<string, string> = {
+        'en': 'English',
+        'zh-TW': 'Traditional Chinese',
+        'ja': 'Japanese',
+        'ko': 'Korean'
+      };
+      const targetLanguage = languageNames[language] || 'English';
+
+      const prompt = `
+      I am planning a trip to "${location}".
+      Event: "${item.title}" (${item.description}).
+      
+      Task:
+      1. Find the current adult entry ticket price (if any). If free, price is 0.
+      2. Find the best public transport method to get there ${origin}.
+         - Include the specific line name (e.g. JR Yamanote Line).
+         - Include the name of the station to exit at.
+         - Mention how many stops if available or the approximate duration.
+      
+      Return a STRICT JSON object. Do NOT use markdown.
+      {
+        "price": number (e.g. 2500, or 0 if free/unknown),
+        "currency": "string" (e.g. "¥", "$", "€"),
+        "transportShort": "string" (short summary, e.g. "Bus 205" or "Subway Line 1"),
+        "details": "string" (Detailed instructions: "Take Bus 205 from X station, get off at Y, walk 5 mins. Exit after 4 stops.")
+      }
+      
+      IMPORTANT:
+      - Use Google Search to get real data.
+      - Translate 'details' and 'transportShort' to ${targetLanguage}.
+      `;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          // responseMimeType must NOT be set when using tools with this model
+        },
+      });
+
+      const text = response.text;
+      if (!text) return null;
+      
+      let cleanJson = text.trim();
+      if (cleanJson.startsWith('```json')) {
+        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
+      } else if (cleanJson.startsWith('```')) {
+        cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
+      }
+      
+      // Sometimes the model returns extra text before/after JSON
+      const jsonStart = cleanJson.indexOf('{');
+      const jsonEnd = cleanJson.lastIndexOf('}');
+      if (jsonStart !== -1 && jsonEnd !== -1) {
+        cleanJson = cleanJson.substring(jsonStart, jsonEnd + 1);
+      }
+      
+      return JSON.parse(cleanJson);
+    } catch (e) {
+      console.error("Logistics research failed:", e);
+      return null;
     }
   }
 
