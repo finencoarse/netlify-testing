@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { Trip, ViewState, Photo, Language, UserProfile, CustomEvent, ItineraryItem, FlightInfo, FontSize } from './types';
+import { Trip, ViewState, Photo, Language, UserProfile, CustomEvent, ItineraryItem, FlightInfo, FontSize, Comment } from './types';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import TripDetail from './components/TripDetail';
@@ -113,22 +113,22 @@ const App: React.FC = () => {
     const exampleTripLocalized = getInitialTrips(language).find(t => t.id === '1');
     if (!exampleTripLocalized) return;
 
-    setTrips(prev => prev.map(t => {
+    setTrips(prev => prev.map((t: Trip) => {
       if (t.id === '1') {
         const localizedItinerary: Record<string, ItineraryItem[]> = {};
         Object.keys(t.itinerary).forEach(date => {
            const currentItems = t.itinerary[date];
            const exampleItems = exampleTripLocalized.itinerary[date] || [];
-           localizedItinerary[date] = currentItems.map(item => {
-             const exampleItem = exampleItems.find(ei => ei.id === item.id);
+           localizedItinerary[date] = currentItems.map((item: ItineraryItem) => {
+             const exampleItem = exampleItems.find((ei: ItineraryItem) => ei.id === item.id);
              if (exampleItem) {
                return { ...item, title: exampleItem.title, description: exampleItem.description, transportMethod: exampleItem.transportMethod, travelDuration: exampleItem.travelDuration };
              }
              return item;
            });
         });
-        const localizedPhotos = t.photos.map(p => {
-          const examplePhoto = exampleTripLocalized.photos.find(ep => ep.id === p.id);
+        const localizedPhotos = t.photos.map((p: Photo) => {
+          const examplePhoto = exampleTripLocalized.photos.find((ep: Photo) => ep.id === p.id);
           return examplePhoto ? { ...p, caption: examplePhoto.caption } : p;
         });
         const localizedFlightDep = exampleTripLocalized.departureFlight;
@@ -143,8 +143,8 @@ const App: React.FC = () => {
           photos: localizedPhotos,
           departureFlight: localizedFlightDep ? { ...t.departureFlight!, ...localizedFlightDep } : t.departureFlight,
           returnFlight: localizedFlightRet ? { ...t.returnFlight!, ...localizedFlightRet } : t.returnFlight,
-          comments: t.comments.map(c => {
-             const exampleComment = exampleTripLocalized.comments.find(ec => ec.id === c.id);
+          comments: t.comments.map((c: Comment) => {
+             const exampleComment = exampleTripLocalized.comments.find((ec: Comment) => ec.id === c.id);
              return exampleComment ? { ...c, text: exampleComment.text } : c;
           })
         };
@@ -274,11 +274,11 @@ const App: React.FC = () => {
       
       <main className="max-w-4xl mx-auto px-4 py-6 md:py-12">
         {view === 'dashboard' && <Dashboard trips={trips.filter(t => t.status === 'past')} onOpenTrip={openTrip} onUpdateTrip={handleUpdateTrip} onDeleteTrip={handleDeleteTrip} language={language} darkMode={darkMode} />}
-        {view === 'trip-detail' && activeTrip && <TripDetail key={activeTrip.id} trip={activeTrip} onUpdate={handleUpdateTrip} onEditPhoto={(photo) => { setEditingPhoto({ tripId: activeTrip.id, photo }); setView('editor'); }} onBack={() => setView('dashboard')} language={language} darkMode={darkMode} userProfile={userProfile} />}
+        {view === 'trip-detail' && activeTrip && <TripDetail key={activeTrip.id} trip={activeTrip} onUpdate={handleUpdateTrip} onEditPhoto={(photo: Photo) => { setEditingPhoto({ tripId: activeTrip.id, photo }); setView('editor'); }} onBack={() => setView('dashboard')} language={language} darkMode={darkMode} userProfile={userProfile} />}
         {view === 'planner' && (
           <Planner 
             trips={trips.filter(t => t.status === 'future')} 
-            onAddTrip={(t) => {
+            onAddTrip={(t: Trip) => {
               setTrips(prev => [...prev, t]);
               updateDataTimestamp();
             }} 
@@ -297,7 +297,7 @@ const App: React.FC = () => {
         )}
         {view === 'calendar' && <Calendar trips={trips} customEvents={customEvents} language={language} darkMode={darkMode} userProfile={userProfile} onOpenTrip={openTrip} onUpdateEvents={handleSetCustomEvents} onCombineTrips={handleCombineTrips} />}
         {view === 'budget' && <Budget trips={trips} language={language} darkMode={darkMode} onUpdateTrip={handleUpdateTrip} />}
-        {view === 'editor' && editingPhoto && activeTrip && <ImageEditor photo={editingPhoto.photo} trip={activeTrip} onSave={(url, type) => {
+        {view === 'editor' && editingPhoto && activeTrip && <ImageEditor photo={editingPhoto.photo} trip={activeTrip} onSave={(url: string, type?: 'image' | 'video') => {
           const updatedPhotos = activeTrip.photos.map(p => p.id === editingPhoto.photo.id ? { ...p, url, type } : p);
           handleUpdateTrip({ ...activeTrip, photos: updatedPhotos });
           setView('trip-detail');
