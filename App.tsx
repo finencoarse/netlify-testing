@@ -74,6 +74,44 @@ const App: React.FC = () => {
     return localStorage.getItem('wanderlust_dark') === 'true';
   });
 
+  // API Key Selection State
+  const [isKeySelected, setIsKeySelected] = useState(false);
+  const [checkingKey, setCheckingKey] = useState(true);
+
+  // Check for API Key on mount
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio) {
+        try {
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          setIsKeySelected(hasKey);
+        } catch (e) {
+          console.error("Failed to check API key state", e);
+          setIsKeySelected(false);
+        }
+      } else {
+        // Not in AI Studio environment, assume standard deployment (env var)
+        setIsKeySelected(true);
+      }
+      setCheckingKey(false);
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio) {
+      try {
+        await window.aistudio.openSelectKey();
+        // Assume success to mitigate race condition
+        setIsKeySelected(true);
+      } catch (e) {
+        console.error("Failed to open key selection", e);
+        // If "Requested entity was not found" error, reset state
+        setIsKeySelected(false);
+      }
+    }
+  };
+
   // Updates timestamp whenever critical data changes
   const updateDataTimestamp = () => {
     const ts = Date.now();
@@ -251,6 +289,42 @@ const App: React.FC = () => {
     setActiveTripId(id);
     setView('trip-detail');
   };
+
+  if (checkingKey) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-zinc-950' : 'bg-white'}`}>
+        <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!isKeySelected) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-6 animate-in fade-in duration-500 ${darkMode ? 'bg-zinc-950 text-white' : 'bg-white text-zinc-900'}`}>
+        <div className="max-w-md w-full text-center space-y-8">
+          <div className="w-20 h-20 rounded-3xl mx-auto flex items-center justify-center bg-indigo-600 shadow-xl mb-8">
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          </div>
+          <h1 className="text-3xl font-black tracking-tight">Unlock AI Features</h1>
+          <p className="text-zinc-500 font-bold leading-relaxed">
+            To use the advanced AI travel planning and photo enhancement features, please select a Google Cloud API key.
+          </p>
+          <div className="space-y-4 pt-4">
+            <button 
+              onClick={handleSelectKey} 
+              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl hover:bg-indigo-700 transition-all active:scale-[0.98]"
+            >
+              Select API Key
+            </button>
+            <p className="text-xs text-zinc-400">
+              Billing must be enabled on your Google Cloud Project. 
+              <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="underline hover:text-indigo-500 ml-1">Learn more</a>
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (view === 'onboarding') {
     return (
