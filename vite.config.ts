@@ -8,9 +8,6 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     // Use relative base path for maximum portability (Netlify Drop, GitHub Pages, etc.)
     base: './',
-    resolve: {
-      extensions: ['.mjs', '.js', '.ts', '.jsx', '.tsx', '.json']
-    },
     // Define process.env globally for the app to use
     define: {
       'process.env.API_KEY': JSON.stringify(env.API_KEY || process.env.API_KEY || ''),
