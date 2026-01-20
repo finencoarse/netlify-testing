@@ -1,0 +1,25 @@
+
+{
+  "short_name": "Wanderlust",
+  "name": "Wanderlust Travel Journal",
+  "description": "Record your past travels and plan future adventures with ease.",
+  "icons": [
+    {
+      "src": "https://api.dicebear.com/7.x/icons/svg?seed=Wanderlust&backgroundColor=4f46e5&icon=globe",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/icons/svg?seed=Wanderlust&backgroundColor=4f46e5&icon=globe",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#4f46e5",
+  "background_color": "#ffffff",
+  "orientation": "portrait"
+}

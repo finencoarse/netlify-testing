@@ -1,0 +1,8 @@
+{
+  "name": "Wanderlust Journal",
+  "description": "A stylish travel journal and planner featuring Gemini AI photo retouching and Veo cinematic vlog generation.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
