@@ -81,6 +81,14 @@ const App: React.FC = () => {
   // Check for API Key on mount
   useEffect(() => {
     const checkKey = async () => {
+      // 1. If key is in environment, use it and bypass selection
+      if (process.env.API_KEY && process.env.API_KEY !== 'PASTE_YOUR_KEY_HERE') {
+        setIsKeySelected(true);
+        setCheckingKey(false);
+        return;
+      }
+
+      // 2. If in AI Studio/IDX environment, check for selected key
       if (window.aistudio) {
         try {
           const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -90,7 +98,8 @@ const App: React.FC = () => {
           setIsKeySelected(false);
         }
       } else {
-        // Not in AI Studio environment, assume standard deployment (env var)
+        // 3. Not in AI Studio and no env key? Assume standard deployment might inject it later or allow pass through
+        // but generally we mark as selected to avoid blocking UI if we can't do anything about it.
         setIsKeySelected(true);
       }
       setCheckingKey(false);
@@ -146,43 +155,63 @@ const App: React.FC = () => {
     }
   }, [fontSize]);
 
-  // Effect to update example trip when language changes
+  // Effect to update example trips when language changes
   useEffect(() => {
-    const exampleTripLocalized = getInitialTrips(language).find(t => t.id === '1');
-    if (!exampleTripLocalized) return;
-
+    const initialTrips = getInitialTrips(language);
+    
     setTrips(prev => prev.map((t: Trip) => {
-      if (t.id === '1') {
+      // Find if this current trip is one of the initial trips (e.g. ID '1' or '2')
+      const localizedVersion = initialTrips.find(it => it.id === t.id);
+      
+      if (localizedVersion) {
+        // Build localized itinerary while preserving user edits might be complex, 
+        // but for "Example" trips, we assume structure matches.
         const localizedItinerary: Record<string, ItineraryItem[]> = {};
+        
         Object.keys(t.itinerary).forEach(date => {
            const currentItems = t.itinerary[date];
-           const exampleItems = exampleTripLocalized.itinerary[date] || [];
+           const exampleItems = localizedVersion.itinerary[date] || [];
+           
            localizedItinerary[date] = currentItems.map((item: ItineraryItem) => {
+             // Try to find matching item in localized version by ID
              const exampleItem = exampleItems.find((ei: ItineraryItem) => ei.id === item.id);
+             
              if (exampleItem) {
-               return { ...item, title: exampleItem.title, description: exampleItem.description, transportMethod: exampleItem.transportMethod, travelDuration: exampleItem.travelDuration };
+               // Update localized fields but keep user-specific fields if they deviate?
+               // For simplicity in this demo app, we overwrite text fields to ensure translation works.
+               return { 
+                 ...item, 
+                 title: exampleItem.title, 
+                 description: exampleItem.description, 
+                 transportMethod: exampleItem.transportMethod, 
+                 travelDuration: exampleItem.travelDuration 
+               };
              }
              return item;
            });
         });
+
+        // Localize Photos captions
         const localizedPhotos = t.photos.map((p: Photo) => {
-          const examplePhoto = exampleTripLocalized.photos.find((ep: Photo) => ep.id === p.id);
+          const examplePhoto = localizedVersion.photos.find((ep: Photo) => ep.id === p.id);
           return examplePhoto ? { ...p, caption: examplePhoto.caption } : p;
         });
-        const localizedFlightDep = exampleTripLocalized.departureFlight;
-        const localizedFlightRet = exampleTripLocalized.returnFlight;
+
+        // Localize Flights
+        const localizedFlightDep = localizedVersion.departureFlight;
+        const localizedFlightRet = localizedVersion.returnFlight;
 
         return {
           ...t,
-          title: exampleTripLocalized.title,
-          description: exampleTripLocalized.description,
-          location: exampleTripLocalized.location,
+          title: localizedVersion.title,
+          description: localizedVersion.description,
+          location: localizedVersion.location,
           itinerary: localizedItinerary,
           photos: localizedPhotos,
           departureFlight: localizedFlightDep ? { ...t.departureFlight!, ...localizedFlightDep } : t.departureFlight,
           returnFlight: localizedFlightRet ? { ...t.returnFlight!, ...localizedFlightRet } : t.returnFlight,
           comments: t.comments.map((c: Comment) => {
-             const exampleComment = exampleTripLocalized.comments.find((ec: Comment) => ec.id === c.id);
+             const exampleComment = localizedVersion.comments.find((ec: Comment) => ec.id === c.id);
              return exampleComment ? { ...c, text: exampleComment.text } : c;
           })
         };
