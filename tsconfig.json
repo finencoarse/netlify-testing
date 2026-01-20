@@ -14,7 +14,7 @@
     "noImplicitAny": false,
     "baseUrl": ".",
     "paths": {
-      "*": ["*"]
+      "@/*": ["./*"]
     }
   },
   "include": ["**/*.ts", "**/*.tsx"],
