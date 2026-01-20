@@ -1,18 +1,18 @@
 
 import React, { useState, useEffect } from 'react';
 import { Trip, ViewState, Photo, Language, UserProfile, CustomEvent, ItineraryItem, FlightInfo, FontSize, Comment } from './types';
-import Header from './components/Header.tsx';
-import Dashboard from './components/Dashboard.tsx';
-import TripDetail from './components/TripDetail.tsx';
-import Planner from './components/Planner.tsx';
-import Calendar from './components/Calendar.tsx';
-import Budget from './components/Budget.tsx';
-import ImageEditor from './components/ImageEditor.tsx';
-import Settings from './components/Settings.tsx';
-import Onboarding from './components/Onboarding.tsx';
-import UserGuide from './components/UserGuide.tsx';
+import Header from './components/Header';
+import Dashboard from './components/Dashboard';
+import TripDetail from './components/TripDetail';
+import Planner from './components/Planner';
+import Calendar from './components/Calendar';
+import Budget from './components/Budget';
+import ImageEditor from './components/ImageEditor';
+import Settings from './components/Settings';
+import Onboarding from './components/Onboarding';
+import UserGuide from './components/UserGuide';
 import { translations } from './translations';
-import { getInitialTrips } from './data/initialTrips.ts';
+import { getInitialTrips } from './data/initialTrips';
 
 const DEFAULT_PROFILE: UserProfile = {
   name: 'Wanderer',
