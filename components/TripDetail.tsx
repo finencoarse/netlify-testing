@@ -27,11 +27,11 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const [editingFlightIndex, setEditingFlightIndex] = useState<number | null>(null);
   
   // Photo Viewing State
-  const [viewingPhotoId, setViewingPhotoId] = useState<string | null>(null);
+  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
   
   // Photo & Comment state
-  const [newComment, setNewComment] = useState('');
-  const [newTag, setNewTag] = useState('');
+  const [commentText, setCommentText] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // AI & Optimization state
@@ -126,11 +126,6 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       return timeA.localeCompare(timeB);
     });
   }, [trip.itinerary, selectedDate]);
-
-  // Derived state for the currently viewing photo
-  const activePhoto = useMemo(() => {
-    return trip.photos.find(p => p.id === viewingPhotoId) || null;
-  }, [trip.photos, viewingPhotoId]);
 
   // Fetch Weather
   useEffect(() => {
@@ -431,6 +426,88 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     onUpdate({ ...trip, ...updates });
   };
 
+  // --- Album Helper Functions ---
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      
+      const readFile = (file: File): Promise<Photo> => {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            resolve({
+              id: `p-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              url: event.target?.result as string,
+              caption: '',
+              date: new Date().toISOString(),
+              tags: [],
+              type: file.type.startsWith('video') ? 'video' : 'image',
+              isFavorite: false,
+              comments: []
+            });
+          };
+          reader.readAsDataURL(file);
+        });
+      };
+
+      Promise.all(files.map(readFile)).then(photos => {
+        onUpdate({ ...trip, photos: [...trip.photos, ...photos] });
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      });
+    }
+  };
+
+  const handleDeletePhoto = () => {
+    if (photoToDelete) {
+      const updatedPhotos = trip.photos.filter(p => p.id !== photoToDelete);
+      onUpdate({ ...trip, photos: updatedPhotos });
+      setPhotoToDelete(null);
+      if (selectedPhoto && selectedPhoto.id === photoToDelete) {
+        setSelectedPhoto(null);
+      }
+    }
+  };
+
+  const toggleFavorite = (photoId: string) => {
+    const updatedPhotos = trip.photos.map(p => 
+      p.id === photoId ? { ...p, isFavorite: !p.isFavorite } : p
+    );
+    const updatedPhoto = updatedPhotos.find(p => p.id === photoId);
+    onUpdate({ ...trip, photos: updatedPhotos });
+    if (selectedPhoto && selectedPhoto.id === photoId && updatedPhoto) {
+      setSelectedPhoto(updatedPhoto);
+    }
+  };
+
+  const handleUpdateCaption = (newCaption: string) => {
+    if (!selectedPhoto) return;
+    const updatedPhotos = trip.photos.map(p => 
+      p.id === selectedPhoto.id ? { ...p, caption: newCaption } : p
+    );
+    onUpdate({ ...trip, photos: updatedPhotos });
+    setSelectedPhoto({ ...selectedPhoto, caption: newCaption });
+  };
+
+  const handleAddComment = () => {
+    if (!selectedPhoto || !commentText.trim()) return;
+    const newCommentObj: Comment = {
+      id: Date.now().toString(),
+      text: commentText,
+      author: userProfile.name || 'User',
+      date: new Date().toISOString()
+    };
+    
+    const updatedPhotos = trip.photos.map(p => 
+      p.id === selectedPhoto.id ? { ...p, comments: [...(p.comments || []), newCommentObj] } : p
+    );
+    
+    const updatedPhoto = updatedPhotos.find(p => p.id === selectedPhoto.id);
+    onUpdate({ ...trip, photos: updatedPhotos });
+    if (updatedPhoto) setSelectedPhoto(updatedPhoto);
+    setCommentText('');
+  };
+
   return (
     <div className={`min-h-screen pb-20 ${darkMode ? 'text-white' : 'text-zinc-900'}`}>
       
@@ -468,6 +545,204 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         <button onClick={() => setActiveTab('album')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'album' ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-500'}`}>{t.album}</button>
       </div>
 
+      {/* ALBUM VIEW */}
+      {activeTab === 'album' && (
+        <div className="space-y-6 animate-in slide-in-from-right-4">
+           {/* Add Photo Button Area */}
+           <div 
+             onClick={() => fileInputRef.current?.click()}
+             className={`border-4 border-dashed rounded-[2rem] aspect-[16/9] sm:aspect-[4/1] flex flex-col items-center justify-center cursor-pointer transition-all ${darkMode ? 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900' : 'border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50'}`}
+           >
+             <div className="w-16 h-16 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-xl mb-4">
+               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4"/></svg>
+             </div>
+             <p className="font-black uppercase tracking-widest text-sm opacity-50">{t.importMedia}</p>
+             <input type="file" multiple accept="image/*,video/*" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+           </div>
+
+           {/* Photo Grid */}
+           {trip.photos.length === 0 ? (
+             <div className="text-center py-20 opacity-30">
+               <p className="font-bold">No photos yet.</p>
+             </div>
+           ) : (
+             <div className="columns-2 md:columns-3 gap-4 space-y-4">
+               {trip.photos.map(photo => (
+                 <div 
+                   key={photo.id} 
+                   className="break-inside-avoid relative group rounded-2xl overflow-hidden shadow-md cursor-pointer"
+                   onClick={() => setSelectedPhoto(photo)}
+                 >
+                   {photo.type === 'video' ? (
+                     <div className="relative">
+                       <video src={photo.url} className="w-full object-cover" />
+                       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                         <div className="w-10 h-10 bg-black/50 rounded-full flex items-center justify-center backdrop-blur-sm">
+                           <svg className="w-5 h-5 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                         </div>
+                       </div>
+                     </div>
+                   ) : (
+                     <img 
+                       src={photo.url} 
+                       alt={photo.caption}
+                       className="w-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                     />
+                   )}
+                   
+                   {/* Overlay - now just for info, actions moved to detail view */}
+                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4">
+                      {photo.caption && <p className="text-white text-xs font-bold truncate drop-shadow-md">{photo.caption}</p>}
+                      <p className="text-white/60 text-[10px] font-black uppercase tracking-widest">{new Date(photo.date).toLocaleDateString()}</p>
+                   </div>
+                   
+                   {/* Quick Delete Trigger */}
+                   <button 
+                     onClick={(e) => { e.stopPropagation(); setPhotoToDelete(photo.id); }} 
+                     className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-rose-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all z-10"
+                   >
+                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                   </button>
+                 </div>
+               ))}
+             </div>
+           )}
+        </div>
+      )}
+
+      {/* PHOTO ZOOM MODAL */}
+      {selectedPhoto && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-8 animate-in fade-in duration-200">
+          <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={() => setSelectedPhoto(null)} />
+          
+          <div className={`relative w-full max-w-6xl h-[85vh] rounded-[2rem] overflow-hidden flex flex-col md:flex-row shadow-2xl ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+            
+            {/* Top Right Controls (Absolute) */}
+            <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+               <button 
+                 onClick={() => onEditPhoto(selectedPhoto)} 
+                 className="p-2 rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-md text-white transition-all"
+                 title="Edit Image"
+               >
+                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+               </button>
+               <button 
+                 onClick={() => setPhotoToDelete(selectedPhoto.id)} 
+                 className="p-2 rounded-full bg-white/20 hover:bg-rose-500 backdrop-blur-md text-white transition-all"
+                 title="Delete Photo"
+               >
+                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+               </button>
+               <button 
+                 onClick={() => setSelectedPhoto(null)} 
+                 className="p-2 rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-md text-white transition-all"
+               >
+                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+               </button>
+            </div>
+
+            {/* Image Section */}
+            <div className="flex-1 bg-black flex items-center justify-center relative group">
+               {selectedPhoto.type === 'video' ? (
+                 <video src={selectedPhoto.url} controls className="max-w-full max-h-full object-contain" />
+               ) : (
+                 <img src={selectedPhoto.url} className="max-w-full max-h-full object-contain" alt="Zoomed" />
+               )}
+            </div>
+
+            {/* Details Section */}
+            <div className={`w-full md:w-[350px] lg:w-[400px] flex flex-col border-l ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
+               <div className="p-6 border-b dark:border-zinc-800">
+                  <div className="flex justify-between items-center mb-4">
+                     <div className="flex items-center gap-3">
+                        <img src={userProfile.pfp} className="w-8 h-8 rounded-full object-cover" alt="User" />
+                        <div>
+                           <p className="font-bold text-sm">{userProfile.name}</p>
+                           <p className="text-[10px] opacity-50">{new Date(selectedPhoto.date).toLocaleDateString()}</p>
+                        </div>
+                     </div>
+                     <button onClick={() => toggleFavorite(selectedPhoto.id)} className="text-zinc-400 hover:text-red-500 transition-colors">
+                        <svg className={`w-6 h-6 ${selectedPhoto.isFavorite ? 'text-red-500 fill-current' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
+                     </button>
+                  </div>
+                  
+                  <textarea 
+                    value={selectedPhoto.caption || ''}
+                    onChange={(e) => handleUpdateCaption(e.target.value)}
+                    placeholder="Write a caption..."
+                    rows={2}
+                    className={`w-full bg-transparent text-sm resize-none outline-none font-medium ${darkMode ? 'placeholder-zinc-600' : 'placeholder-zinc-400'}`}
+                  />
+               </div>
+
+               <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+                  <h4 className="text-xs font-black uppercase tracking-widest opacity-50">{t.commentsTitle}</h4>
+                  {!selectedPhoto.comments || selectedPhoto.comments.length === 0 ? (
+                     <p className="text-xs opacity-30 italic">No comments yet.</p>
+                  ) : (
+                     selectedPhoto.comments.map(comment => (
+                        <div key={comment.id} className="flex gap-3">
+                           <div className="w-6 h-6 rounded-full bg-indigo-500 flex items-center justify-center text-[10px] text-white font-bold shrink-0">
+                              {comment.author.charAt(0)}
+                           </div>
+                           <div>
+                              <p className="text-xs font-bold">{comment.author} <span className="text-[9px] font-normal opacity-50 ml-1">{new Date(comment.date).toLocaleDateString()}</span></p>
+                              <p className="text-sm opacity-80">{comment.text}</p>
+                           </div>
+                        </div>
+                     ))
+                  )}
+               </div>
+
+               <div className="p-4 border-t dark:border-zinc-800">
+                  <div className={`flex items-center gap-2 rounded-2xl p-2 border ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                     <input 
+                       value={commentText}
+                       onChange={(e) => setCommentText(e.target.value)}
+                       placeholder={t.addComment}
+                       className="flex-1 bg-transparent text-sm outline-none px-2"
+                       onKeyDown={(e) => e.key === 'Enter' && handleAddComment()}
+                     />
+                     <button 
+                       onClick={handleAddComment}
+                       disabled={!commentText.trim()}
+                       className="p-2 bg-indigo-600 text-white rounded-xl disabled:opacity-50"
+                     >
+                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                     </button>
+                  </div>
+               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (Reused) */}
+      {photoToDelete && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setPhotoToDelete(null)} />
+          <div className={`relative w-full max-w-sm p-6 rounded-[2rem] shadow-2xl animate-in zoom-in-95 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+            <h3 className={`text-xl font-black mb-2 ${darkMode ? 'text-white' : 'text-zinc-900'}`}>Delete Photo?</h3>
+            <p className="text-sm text-zinc-500 font-bold mb-6">This action cannot be undone.</p>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setPhotoToDelete(null)} 
+                className={`flex-1 py-3 rounded-xl font-black uppercase text-xs tracking-widest ${darkMode ? 'bg-zinc-800 text-white hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleDeletePhoto} 
+                className="flex-1 py-3 rounded-xl font-black uppercase text-xs tracking-widest bg-rose-500 text-white hover:bg-rose-600 shadow-lg shadow-rose-500/30"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ITINERARY VIEW */}
       {activeTab === 'itinerary' && (
         <div className="space-y-6 animate-in slide-in-from-right-4">
           
