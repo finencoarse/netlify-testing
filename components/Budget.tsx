@@ -105,8 +105,12 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
     setEditingItem(null);
   };
 
+  const calculateTotalFromParts = (parts: ExpensePart[]) => {
+    return parts.reduce((sum, p) => sum + (p.isUncounted ? 0 : (parseFloat(p.amount as any) || 0)), 0);
+  };
+
   const handleAddPart = () => {
-    const newParts = [...(editForm.expenseParts || []), { id: Date.now().toString(), label: '', amount: 0 }];
+    const newParts = [...(editForm.expenseParts || []), { id: Date.now().toString(), label: '', amount: 0, isUncounted: false }];
     setEditForm({ ...editForm, expenseParts: newParts });
   };
 
@@ -115,8 +119,7 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
     newParts.splice(index, 1);
     
     // Auto-sum remainder
-    const total = newParts.reduce((sum, p) => sum + (p.amount || 0), 0);
-    
+    const total = calculateTotalFromParts(newParts);
     setEditForm({ ...editForm, expenseParts: newParts, actualExpense: total > 0 ? total : editForm.actualExpense });
   };
 
@@ -124,13 +127,13 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
     const newParts = [...(editForm.expenseParts || [])];
     newParts[index] = { ...newParts[index], [field]: value };
     
-    // Auto-sum on amount change
-    let newTotal = editForm.actualExpense;
-    if (field === 'amount') {
-      newTotal = newParts.reduce((sum, p) => sum + (parseFloat(p.amount as any) || 0), 0);
+    // Auto-sum on amount or uncounted change
+    if (field === 'amount' || field === 'isUncounted') {
+      const newTotal = calculateTotalFromParts(newParts);
+      setEditForm({ ...editForm, expenseParts: newParts, actualExpense: newTotal });
+    } else {
+      setEditForm({ ...editForm, expenseParts: newParts });
     }
-
-    setEditForm({ ...editForm, expenseParts: newParts, actualExpense: newTotal });
   };
 
   return (
@@ -289,43 +292,48 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
                    return (
                      <div key={date} className="space-y-2">
                        <h5 className="text-[10px] font-black uppercase tracking-widest opacity-50 sticky top-0 bg-white dark:bg-zinc-900 py-2 z-10">{date}</h5>
-                       {relevantItems.map(item => (
-                         <div 
-                           key={item.id} 
-                           onClick={() => openEditor(trip.id, date, item)}
-                           className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer ${darkMode ? 'border-zinc-800 hover:bg-zinc-800 hover:border-zinc-700' : 'border-zinc-50 hover:bg-zinc-50 hover:border-zinc-200'}`}
-                         >
-                           <div className="flex justify-between items-start">
-                             <div className="flex items-center gap-3">
-                               <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${
-                                  item.type === 'eating' ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400' : 
-                                  item.type === 'transport' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' : 
-                                  item.type === 'shopping' ? 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-400' : 
-                                  'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'
-                                }`}>
-                                  {item.type === 'eating' ? '🍱' : item.type === 'transport' ? '🚆' : item.type === 'shopping' ? '🛍️' : '🏛️'}
-                                </div>
-                                <div>
-                                  <p className="font-bold text-sm leading-tight group-hover:text-indigo-500 transition-colors">{item.title}</p>
-                                  <div className="flex items-center gap-2">
-                                    <p className="text-[10px] opacity-60">{item.spendingDescription || "No details provided"}</p>
-                                    {item.expenseParts && item.expenseParts.length > 0 && (
-                                       <span className="text-[9px] font-black bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded-full text-zinc-600 dark:text-zinc-300">
-                                         {item.expenseParts.length} Parts
-                                       </span>
-                                    )}
+                       {relevantItems.map(item => {
+                         // Check for hidden/uncounted items
+                         const hiddenCount = item.expenseParts?.filter(p => p.isUncounted).length || 0;
+                         
+                         return (
+                           <div 
+                             key={item.id} 
+                             onClick={() => openEditor(trip.id, date, item)}
+                             className={`group p-4 rounded-2xl border-2 transition-all cursor-pointer ${darkMode ? 'border-zinc-800 hover:bg-zinc-800 hover:border-zinc-700' : 'border-zinc-50 hover:bg-zinc-50 hover:border-zinc-200'}`}
+                           >
+                             <div className="flex justify-between items-start">
+                               <div className="flex items-center gap-3">
+                                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${
+                                    item.type === 'eating' ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400' : 
+                                    item.type === 'transport' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' : 
+                                    item.type === 'shopping' ? 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-400' : 
+                                    'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'
+                                  }`}>
+                                    {item.type === 'eating' ? '🍱' : item.type === 'transport' ? '🚆' : item.type === 'shopping' ? '🛍️' : '🏛️'}
                                   </div>
-                                </div>
-                             </div>
-                             <div className="text-right">
-                               <p className={`text-sm font-black ${item.actualExpense > item.estimatedExpense ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                 {item.currency}{item.actualExpense}
-                               </p>
-                               <p className="text-[9px] font-bold opacity-40">Est: {item.currency}{item.estimatedExpense}</p>
+                                  <div>
+                                    <p className="font-bold text-sm leading-tight group-hover:text-indigo-500 transition-colors">{item.title}</p>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-[10px] opacity-60">{item.spendingDescription || "No details provided"}</p>
+                                      {item.expenseParts && item.expenseParts.length > 0 && (
+                                         <span className="text-[9px] font-black bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded-full text-zinc-600 dark:text-zinc-300">
+                                           {item.expenseParts.length} Parts {hiddenCount > 0 && `(${hiddenCount} hidden)`}
+                                         </span>
+                                      )}
+                                    </div>
+                                  </div>
+                               </div>
+                               <div className="text-right">
+                                 <p className={`text-sm font-black ${item.actualExpense > item.estimatedExpense ? 'text-rose-500' : 'text-emerald-500'}`}>
+                                   {item.currency}{item.actualExpense}
+                                 </p>
+                                 <p className="text-[9px] font-bold opacity-40">Est: {item.currency}{item.estimatedExpense}</p>
+                               </div>
                              </div>
                            </div>
-                         </div>
-                       ))}
+                         );
+                       })}
                      </div>
                    );
                  })}
@@ -390,19 +398,26 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
                  
                  <div className="space-y-2">
                    {(editForm.expenseParts || []).map((part, index) => (
-                     <div key={part.id} className="flex gap-2 items-center animate-in slide-in-from-left-2">
+                     <div key={part.id} className={`flex gap-2 items-center animate-in slide-in-from-left-2 transition-all ${part.isUncounted ? 'opacity-40 grayscale' : ''}`}>
+                       <button 
+                         onClick={() => handleUpdatePart(index, 'isUncounted', !part.isUncounted)}
+                         title="Cheat: Don't count this in total"
+                         className={`p-2.5 rounded-xl transition-all ${part.isUncounted ? 'bg-indigo-100 text-indigo-500' : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400'}`}
+                       >
+                         🙈
+                       </button>
                        <input 
                          placeholder="Item Name"
                          value={part.label}
                          onChange={(e) => handleUpdatePart(index, 'label', e.target.value)}
-                         className={`flex-[2] p-2.5 rounded-xl font-medium text-xs outline-none border ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
+                         className={`flex-[2] p-2.5 rounded-xl font-medium text-xs outline-none border ${part.isUncounted ? 'line-through' : ''} ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
                        />
                        <input 
                          type="number"
                          placeholder="0.00"
                          value={part.amount}
                          onChange={(e) => handleUpdatePart(index, 'amount', e.target.value)}
-                         className={`flex-1 p-2.5 rounded-xl font-bold text-xs outline-none border text-right ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
+                         className={`flex-1 p-2.5 rounded-xl font-bold text-xs outline-none border text-right ${part.isUncounted ? 'line-through' : ''} ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
                        />
                        <button 
                          onClick={() => handleRemovePart(index)}
