@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Trip, Language, ItineraryItem, UserProfile } from '../types';
+import { Trip, Language, ItineraryItem, UserProfile, ExpensePart } from '../types';
 import { translations } from '../translations';
 import { GeminiService } from '../services/geminiService';
 
@@ -83,7 +83,8 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
       actualExpense: item.actualExpense,
       estimatedExpense: item.estimatedExpense,
       currency: item.currency,
-      spendingDescription: item.spendingDescription || ''
+      spendingDescription: item.spendingDescription || '',
+      expenseParts: item.expenseParts || []
     });
   };
 
@@ -102,6 +103,34 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
       onUpdateTrip({ ...trip, itinerary: updatedItinerary });
     }
     setEditingItem(null);
+  };
+
+  const handleAddPart = () => {
+    const newParts = [...(editForm.expenseParts || []), { id: Date.now().toString(), label: '', amount: 0 }];
+    setEditForm({ ...editForm, expenseParts: newParts });
+  };
+
+  const handleRemovePart = (index: number) => {
+    const newParts = [...(editForm.expenseParts || [])];
+    newParts.splice(index, 1);
+    
+    // Auto-sum remainder
+    const total = newParts.reduce((sum, p) => sum + (p.amount || 0), 0);
+    
+    setEditForm({ ...editForm, expenseParts: newParts, actualExpense: total > 0 ? total : editForm.actualExpense });
+  };
+
+  const handleUpdatePart = (index: number, field: keyof ExpensePart, value: any) => {
+    const newParts = [...(editForm.expenseParts || [])];
+    newParts[index] = { ...newParts[index], [field]: value };
+    
+    // Auto-sum on amount change
+    let newTotal = editForm.actualExpense;
+    if (field === 'amount') {
+      newTotal = newParts.reduce((sum, p) => sum + (parseFloat(p.amount as any) || 0), 0);
+    }
+
+    setEditForm({ ...editForm, expenseParts: newParts, actualExpense: newTotal });
   };
 
   return (
@@ -278,7 +307,14 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
                                 </div>
                                 <div>
                                   <p className="font-bold text-sm leading-tight group-hover:text-indigo-500 transition-colors">{item.title}</p>
-                                  <p className="text-[10px] opacity-60">{item.spendingDescription || "No details provided"}</p>
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-[10px] opacity-60">{item.spendingDescription || "No details provided"}</p>
+                                    {item.expenseParts && item.expenseParts.length > 0 && (
+                                       <span className="text-[9px] font-black bg-zinc-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded-full text-zinc-600 dark:text-zinc-300">
+                                         {item.expenseParts.length} Parts
+                                       </span>
+                                    )}
+                                  </div>
                                 </div>
                              </div>
                              <div className="text-right">
@@ -304,20 +340,21 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
       {editingItem && (
         <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setEditingItem(null)} />
-          <div className={`relative w-full max-w-sm p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
-             <div className="flex justify-between items-center mb-6">
+          <div className={`relative w-full max-w-sm max-h-[85vh] flex flex-col p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+             <div className="flex justify-between items-center mb-6 flex-shrink-0">
                <h3 className="text-xl font-black">{t.spendingDetail}</h3>
                <button onClick={() => setEditingItem(null)} className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-800">
                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
                </button>
              </div>
 
-             <div className="space-y-4">
+             <div className="space-y-6 overflow-y-auto custom-scrollbar flex-1 pb-4">
                <div>
                  <p className="text-[10px] font-black uppercase tracking-widest opacity-50 mb-1">{t.eventName}</p>
                  <p className="font-bold text-lg">{editingItem.item.title}</p>
                </div>
 
+               {/* Main Cost Inputs */}
                <div className="grid grid-cols-2 gap-4">
                  <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.actualCost}</label>
@@ -339,6 +376,50 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
                  </div>
                </div>
 
+               {/* Detailed Breakdown */}
+               <div className="space-y-3">
+                 <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Bill Breakdown</label>
+                    <button 
+                      onClick={handleAddPart}
+                      className="text-[10px] font-black uppercase tracking-widest text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 px-2 py-1 rounded-lg transition-colors"
+                    >
+                      + Add Item
+                    </button>
+                 </div>
+                 
+                 <div className="space-y-2">
+                   {(editForm.expenseParts || []).map((part, index) => (
+                     <div key={part.id} className="flex gap-2 items-center animate-in slide-in-from-left-2">
+                       <input 
+                         placeholder="Item Name"
+                         value={part.label}
+                         onChange={(e) => handleUpdatePart(index, 'label', e.target.value)}
+                         className={`flex-[2] p-2.5 rounded-xl font-medium text-xs outline-none border ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
+                       />
+                       <input 
+                         type="number"
+                         placeholder="0.00"
+                         value={part.amount}
+                         onChange={(e) => handleUpdatePart(index, 'amount', e.target.value)}
+                         className={`flex-1 p-2.5 rounded-xl font-bold text-xs outline-none border text-right ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
+                       />
+                       <button 
+                         onClick={() => handleRemovePart(index)}
+                         className="p-2 text-rose-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors"
+                       >
+                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 12H4"/></svg>
+                       </button>
+                     </div>
+                   ))}
+                   {(editForm.expenseParts || []).length === 0 && (
+                     <div className="text-center py-4 border-2 border-dashed rounded-xl opacity-30">
+                       <p className="text-[10px] font-black uppercase">No breakdown added</p>
+                     </div>
+                   )}
+                 </div>
+               </div>
+
                <div className="space-y-1">
                  <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.currency}</label>
                  <input 
@@ -351,17 +432,19 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
                <div className="space-y-1">
                  <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.briefDescription} / Notes</label>
                  <textarea 
-                    rows={3}
+                    rows={2}
                     value={editForm.spendingDescription}
                     onChange={(e) => setEditForm({ ...editForm, spendingDescription: e.target.value })}
                     placeholder="E.g. Paid via Credit Card..."
                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 resize-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
                  />
                </div>
+             </div>
 
+             <div className="pt-4 flex-shrink-0">
                <button 
                  onClick={saveExpense}
-                 className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl mt-2"
+                 className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl"
                >
                  {t.save}
                </button>
