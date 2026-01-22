@@ -24,6 +24,8 @@ export interface FlightInfo {
   airport: string;
   transport: string;
   label?: string;
+  price?: number;      // Estimated cost
+  actualPrice?: number; // Actual cost
 }
 
 export interface Hotel {
@@ -51,6 +53,16 @@ export interface ExpensePart {
   label: string;
   amount: number;
   isUncounted?: boolean;
+}
+
+export interface StandaloneExpense {
+  id: string;
+  title: string;
+  amount: number;
+  currency: string;
+  category: 'eating' | 'shopping' | 'sightseeing' | 'transport' | 'other';
+  date?: string;
+  notes?: string;
 }
 
 export interface ItineraryItem {
@@ -117,6 +129,7 @@ export interface Trip {
   returnFlight?: FlightInfo;
   defaultCurrency?: string;
   hotels?: Hotel[];
+  expenses?: StandaloneExpense[];
 }
 
 export type ViewState = 'onboarding' | 'dashboard' | 'trip-detail' | 'planner' | 'calendar' | 'budget' | 'editor' | 'settings';
