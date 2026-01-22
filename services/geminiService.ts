@@ -1,6 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { ItineraryItem, TourGuideData, Trip } from "../types";
+import { ItineraryItem, TourGuideData, Trip, Hotel } from "../types";
 
 const STORAGE_KEY_GEMINI_COUNT = 'wanderlust_gemini_count';
 
@@ -22,6 +22,28 @@ export class GeminiService {
     return new GoogleGenAI({ apiKey });
   }
 
+  private static extractJson(text: string | undefined): any {
+    if (!text) return null;
+    try {
+      // 1. Try direct parse
+      return JSON.parse(text);
+    } catch (e) {
+      // 2. Try extracting from markdown block
+      const jsonBlockMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      if (jsonBlockMatch) {
+        try { return JSON.parse(jsonBlockMatch[1]); } catch (e2) {}
+      }
+      // 3. Try finding the first { and last }
+      const firstOpen = text.indexOf('{');
+      const lastClose = text.lastIndexOf('}');
+      if (firstOpen !== -1 && lastClose !== -1) {
+        try { return JSON.parse(text.substring(firstOpen, lastClose + 1)); } catch (e3) {}
+      }
+      console.warn("Failed to extract JSON from response:", text.substring(0, 100) + "...");
+      return null;
+    }
+  }
+
   /**
    * Translates the text content of a trip to the target language.
    */
@@ -38,7 +60,6 @@ export class GeminiService {
       };
       const targetLanguage = languageNames[language] || 'English';
 
-      // We strip out heavy fields (photos, comments) to save tokens and ensure JSON stability
       const minimalTrip = {
         title: trip.title,
         location: trip.location,
@@ -69,17 +90,9 @@ export class GeminiService {
         }
       });
 
-      const text = response.text;
-      if (!text) return null;
+      const translatedData = this.extractJson(response.text);
+      if (!translatedData) return null;
 
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-      }
-
-      const translatedData = JSON.parse(cleanJson);
-
-      // Merge translated data back into original trip
       return {
         ...trip,
         title: translatedData.title || trip.title,
@@ -94,9 +107,6 @@ export class GeminiService {
     }
   }
 
-  /**
-   * Fetches the exchange rate between two currencies for a specific date using Google Search.
-   */
   static async getExchangeRate(fromCurrency: string, toCurrency: string, date?: string): Promise<number | null> {
     this.incrementUsage();
     try {
@@ -114,38 +124,23 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
+          responseMimeType: 'application/json',
         },
       });
 
-      const text = response.text;
-      if (!text) return null;
-
-      let cleanJson = text.trim();
-      // Cleanup markdown if model adds it despite instructions
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-      } else if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
-      }
-      
-      const result = JSON.parse(cleanJson);
-      return result.rate || null;
+      const result = this.extractJson(response.text);
+      return result?.rate || null;
     } catch (e) {
       console.error("Exchange rate fetch failed:", e);
       return null;
     }
   }
 
-  /**
-   * Edits an image based on a text prompt using gemini-2.5-flash-image.
-   * Fixed 'INVALID_ARGUMENT' error by improving base64 cleaning and content structure.
-   */
   static async editImage(base64Image: string, prompt: string): Promise<string | null> {
     this.incrementUsage();
     try {
       const ai = this.getClient();
       
-      // Extract base64 data and mimeType robustly
       const parts = base64Image.split(',');
       if (parts.length < 2) throw new Error("Invalid base64 image string");
       
@@ -177,17 +172,10 @@ export class GeminiService {
         throw new Error('Gemini returned an empty response.');
       }
 
-      // Look for the image part in the response
       for (const part of candidate.content.parts) {
         if (part.inlineData) {
           return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         }
-      }
-      
-      // If no image was returned but text was, it might be a refusal or description
-      const textPart = candidate.content.parts.find(p => p.text);
-      if (textPart) {
-        console.warn("Gemini response contained text but no image:", textPart.text);
       }
       
       return null;
@@ -197,15 +185,11 @@ export class GeminiService {
     }
   }
 
-  /**
-   * Uses Google Maps grounding to suggest an efficient route for a list of locations.
-   */
   static async getMapRoute(location: string, items: ItineraryItem[], language: string = 'en'): Promise<{ text: string; links: { uri: string; title: string }[] }> {
     this.incrementUsage();
     try {
       const ai = this.getClient();
       
-      // Get user location for context
       let latLng = undefined;
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
@@ -213,7 +197,7 @@ export class GeminiService {
         });
         latLng = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
       } catch (e) {
-        console.warn("Geolocation not available for Maps grounding context.");
+        // Ignore geolocation errors
       }
 
       const languageNames: Record<string, string> = {
@@ -260,9 +244,6 @@ export class GeminiService {
     }
   }
 
-  /**
-   * Researches logistics for a specific event: ticket prices and transport.
-   */
   static async getEventLogistics(location: string, item: ItineraryItem, prevLocation: string | null, language: string = 'en'): Promise<{ price?: number, currency?: string, transportShort?: string, details?: string } | null> {
     this.incrementUsage();
     try {
@@ -284,21 +265,16 @@ export class GeminiService {
       Task:
       1. Find the current adult entry ticket price (if any). If free, price is 0.
       2. Find the best public transport method to get there ${origin}.
-         - Include the specific line name (e.g. JR Yamanote Line).
-         - Include the name of the station to exit at.
-         - Mention how many stops if available or the approximate duration.
       
-      Return a STRICT JSON object. Do NOT use markdown.
+      Return a STRICT JSON object.
       {
         "price": number (e.g. 2500, or 0 if free/unknown),
         "currency": "string" (e.g. "¥", "$", "€"),
-        "transportShort": "string" (short summary, e.g. "Bus 205" or "Subway Line 1"),
-        "details": "string" (Detailed instructions: "Take Bus 205 from X station, get off at Y, walk 5 mins. Exit after 4 stops.")
+        "transportShort": "string" (short summary, e.g. "Bus 205"),
+        "details": "string" (Detailed instructions)
       }
       
-      IMPORTANT:
-      - Use Google Search to get real data.
-      - Translate 'details' and 'transportShort' to ${targetLanguage}.
+      IMPORTANT: Use Google Search. Translate 'details' and 'transportShort' to ${targetLanguage}.
       `;
 
       const response = await ai.models.generateContent({
@@ -306,37 +282,17 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          // responseMimeType must NOT be set when using tools with this model
+          responseMimeType: 'application/json',
         },
       });
 
-      const text = response.text;
-      if (!text) return null;
-      
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-      } else if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
-      }
-      
-      // Sometimes the model returns extra text before/after JSON
-      const jsonStart = cleanJson.indexOf('{');
-      const jsonEnd = cleanJson.lastIndexOf('}');
-      if (jsonStart !== -1 && jsonEnd !== -1) {
-        cleanJson = cleanJson.substring(jsonStart, jsonEnd + 1);
-      }
-      
-      return JSON.parse(cleanJson);
+      return this.extractJson(response.text);
     } catch (e) {
       console.error("Logistics research failed:", e);
       return null;
     }
   }
 
-  /**
-   * Acts as a Tour Guide to find stories and tips for a specific itinerary item.
-   */
   static async getTourGuideInfo(location: string, item: ItineraryItem, language: string = 'en'): Promise<TourGuideData | null> {
     this.incrementUsage();
     try {
@@ -353,20 +309,17 @@ export class GeminiService {
       const prompt = `
       You are an expert local tour guide. 
       I am visiting "${item.title}" in "${location}".
-      My notes say: "${item.description}".
       
-      Please use Google Search to find the latest interesting stories and practical guide information.
+      Use Google Search to find latest stories and tips.
       
       Return the output STRICTLY as a valid JSON object. 
-      Do not use markdown formatting (like \`\`\`json). Just return the raw JSON string.
-      
       The JSON must match this structure:
       {
-        "story": "A short, engaging paragraph about the history or a fun fact about this place (max 60 words).",
-        "mustEat": ["List of 1-3 general food types famous here (e.g. 'Matcha Ice Cream', 'Crab')"],
-        "mustOrder": ["List of 1-3 specific famous menu items or signature dishes to order"],
+        "story": "A short, engaging paragraph about the history (max 60 words).",
+        "mustEat": ["List of 1-3 general food types famous here"],
+        "mustOrder": ["List of 1-3 specific famous menu items"],
         "souvenirs": ["List of 1-3 must-buy souvenir items"],
-        "reservationTips": "Any important reservation codes, best times to visit, or booking requirements."
+        "reservationTips": "Any important reservation codes or booking requirements."
       }
       
       IMPORTANT: Translate all the content values into ${targetLanguage}.
@@ -377,25 +330,11 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
+          responseMimeType: 'application/json',
         },
       });
 
-      const text = response.text;
-      if (!text) return null;
-      
-      let cleanJson = text.trim();
-      const jsonBlockMatch = cleanJson.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
-      if (jsonBlockMatch) {
-        cleanJson = jsonBlockMatch[1];
-      } else {
-        const firstOpen = cleanJson.indexOf('{');
-        const lastClose = cleanJson.lastIndexOf('}');
-        if (firstOpen !== -1 && lastClose !== -1) {
-          cleanJson = cleanJson.substring(firstOpen, lastClose + 1);
-        }
-      }
-
-      return JSON.parse(cleanJson) as TourGuideData;
+      return this.extractJson(response.text) as TourGuideData;
 
     } catch (error) {
       console.error('Error getting tour guide info:', error);
@@ -403,16 +342,11 @@ export class GeminiService {
     }
   }
 
-  /**
-   * Gets daily weather forecast for a trip.
-   */
   static async getWeatherForecast(location: string, startDate: string, endDate: string): Promise<Record<string, { icon: string, temp: string, condition: string }> | null> {
     this.incrementUsage();
     try {
       const ai = this.getClient();
 
-      // Removed googleSearch tool to prevent refusals ("I am sorry I cannot predict...").
-      // We use standard generation with JSON enforcement to get historical/typical weather data.
       const prompt = `
       I need a daily weather forecast estimation for ${location} from ${startDate} to ${endDate}.
       Based on historical weather data for this location and time of year, provide a realistic forecast.
@@ -431,26 +365,13 @@ export class GeminiService {
         }
       });
 
-      const text = response.text;
-      if (!text) return null;
-
-      // With responseMimeType: 'application/json', the text should be clean JSON.
-      // We still include a basic cleanup just in case.
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-      }
-
-      return JSON.parse(cleanJson);
+      return this.extractJson(response.text);
     } catch (e) {
       console.error("Weather fetch failed:", e);
       return null;
     }
   }
 
-  /**
-   * Generates a full trip itinerary based on basic inputs.
-   */
   static async generateTripItinerary(
     location: string, 
     days: number, 
@@ -477,34 +398,31 @@ export class GeminiService {
       Interests/Preferences: "${interests}".
 
       Create a detailed plan.
-      Return a STRICTLY valid JSON object. Do not include markdown formatting.
+      Return a STRICTLY valid JSON object.
       
       Structure:
       {
         "title": "A creative title for the trip",
         "description": "A brief overview of the trip experience",
         "itinerary": {
-          "1": [  // Day 1 events
+          "1": [
              {
                "time": "09:00",
-               "type": "sightseeing", // Options: sightseeing, eating, shopping, transport, other
+               "type": "sightseeing",
                "title": "Event Title",
                "description": "Short description of activity",
-               "estimatedExpense": 50, // Number only
+               "estimatedExpense": 50,
                "currency": "${currency}",
                "transportMethod": "Walking/Taxi/Bus"
-             },
-             ... more events for Day 1
+             }
           ],
-          "2": [ ... Day 2 events ... ]
-          // Continue for all ${days} days
+          "2": []
         }
       }
 
       IMPORTANT: 
       - Translate all text values to ${targetLanguage}.
       - Ensure costs fit within the total budget of ${budget}.
-      - 'itinerary' keys must be string numbers "1", "2", etc. representing the day number.
       `;
 
       const response = await ai.models.generateContent({
@@ -515,24 +433,13 @@ export class GeminiService {
         }
       });
 
-      const text = response.text;
-      if (!text) return null;
-
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-      }
-      
-      return JSON.parse(cleanJson);
+      return this.extractJson(response.text);
     } catch (e) {
       console.error("Trip generation failed:", e);
       return null;
     }
   }
 
-  /**
-   * Discovers nearby places based on a query category.
-   */
   static async discoverPlaces(location: string, query: string, language: string = 'en'): Promise<any[]> {
     this.incrementUsage();
     try {
@@ -550,8 +457,7 @@ export class GeminiService {
       Find 5 popular and real places matching "${query}" near "${location}".
       Use Google Search to verify they exist.
       
-      Return a STRICT JSON object with a "places" array. 
-      Do NOT use Markdown.
+      Return a STRICT JSON object with a "places" array.
       
       Example structure:
       {
@@ -559,7 +465,7 @@ export class GeminiService {
           {
             "title": "Name",
             "description": "Short description (max 10 words)",
-            "type": "eating", // or sightseeing, shopping, other
+            "type": "eating",
             "estimatedExpense": 20
           }
         ]
@@ -573,23 +479,71 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
+          responseMimeType: 'application/json',
         }
       });
 
-      const text = response.text;
-      if (!text) return [];
-
-      let cleanJson = text.trim();
-      if (cleanJson.startsWith('```json')) {
-        cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-      } else if (cleanJson.startsWith('```')) {
-        cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
-      }
-      
-      const result = JSON.parse(cleanJson);
-      return result.places || [];
+      const result = this.extractJson(response.text);
+      return result?.places || [];
     } catch (e) {
       console.error("Discovery failed:", e);
+      return [];
+    }
+  }
+
+  static async recommendHotels(location: string, itinerary: ItineraryItem[], preferences: string, language: string): Promise<Hotel[]> {
+    this.incrementUsage();
+    try {
+      const ai = this.getClient();
+
+      const languageNames: Record<string, string> = {
+        'en': 'English',
+        'zh-TW': 'Traditional Chinese',
+        'ja': 'Japanese',
+        'ko': 'Korean'
+      };
+      const targetLanguage = languageNames[language] || 'English';
+
+      const placeList = itinerary.map(item => item.title).slice(0, 15).join(", ");
+
+      const prompt = `
+      Act as a travel expert. I need accommodation in "${location}" convenient for visiting: ${placeList}.
+      Preferences: "${preferences || 'Good location'}".
+      
+      Using Google Search, identify 3-4 suitable hotels.
+      
+      Return a STRICT JSON object.
+      {
+        "hotels": [
+          {
+            "name": "Hotel Name",
+            "description": "Brief description in ${targetLanguage}",
+            "address": "Address",
+            "price": "Price estimate string",
+            "rating": 4.5,
+            "amenities": ["Wifi"],
+            "bookingUrl": "url if found",
+            "reason": "Why it fits in ${targetLanguage}"
+          }
+        ]
+      }
+      `;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          responseMimeType: 'application/json',
+        }
+      });
+
+      const result = this.extractJson(response.text);
+      if (!result || !result.hotels) return [];
+      
+      return (result.hotels || []).map((h: any) => ({ ...h, id: Math.random().toString(36).substr(2, 9) }));
+    } catch (e) {
+      console.error("Hotel recommendation failed:", e);
       return [];
     }
   }
