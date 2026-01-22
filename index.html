@@ -58,24 +58,60 @@
         .safe-area-bottom {
             padding-bottom: env(safe-area-inset-bottom);
         }
+        /* Initial Loading Spinner */
+        #loading-spinner {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            background-color: #fafafa;
+            color: #4f46e5;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(79, 70, 229, 0.1);
+            border-left-color: #4f46e5;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        @media (prefers-color-scheme: dark) {
+            #loading-spinner {
+                background-color: #09090b; /* zinc-950 */
+                color: #818cf8; /* indigo-400 */
+            }
+            .spinner {
+                border-color: rgba(129, 140, 248, 0.1);
+                border-left-color: #818cf8;
+            }
+        }
     </style>
 <script type="importmap">
 {
   "imports": {
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
     "react/": "https://esm.sh/react@^19.2.3/",
     "react": "https://esm.sh/react@^19.2.3",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
     "path": "https://esm.sh/path@^0.12.7",
-    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@^2.91.0"
   }
 }
 </script>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root">
+        <div id="loading-spinner">
+            <div class="spinner"></div>
+        </div>
+    </div>
     <!-- Use relative path for Vite entry point to support any base URL -->
     <script type="module" src="./index.tsx"></script>
     <script>
