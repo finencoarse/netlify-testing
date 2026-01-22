@@ -124,7 +124,7 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
+          // responseMimeType: 'application/json' removed because it conflicts with tools
         },
       });
 
@@ -282,7 +282,7 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
+          // responseMimeType: 'application/json' removed because it conflicts with tools
         },
       });
 
@@ -330,7 +330,7 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
+          // responseMimeType: 'application/json' removed because it conflicts with tools
         },
       });
 
@@ -479,8 +479,8 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
-        }
+          // responseMimeType: 'application/json' removed because it conflicts with tools
+        },
       });
 
       const result = this.extractJson(response.text);
@@ -522,7 +522,7 @@ export class GeminiService {
             "price": "Price estimate string",
             "rating": 4.5,
             "amenities": ["Wifi"],
-            "bookingUrl": "url if found",
+            "bookingUrl": "A direct URL to book this hotel (e.g. Google Hotels, Booking.com, or official site).",
             "reason": "Why it fits in ${targetLanguage}"
           }
         ]
@@ -534,7 +534,7 @@ export class GeminiService {
         contents: prompt,
         config: {
           tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
+          // responseMimeType: 'application/json' removed because it conflicts with tools
         }
       });
 
