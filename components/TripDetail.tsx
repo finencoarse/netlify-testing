@@ -1,9 +1,10 @@
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Trip, Photo, Language, UserProfile, ItineraryItem, FlightInfo, Comment, Hotel } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, TourGuideData } from '../types';
 import { translations } from '../translations';
 import { GeminiService } from '../services/geminiService';
-import { canLoadMap, recordMapLoad, getMapUrl, getExternalMapsUrl } from '../services/mapsService';
+import { GoogleService } from '../services/driveService';
+import { getExternalMapsUrl, getMapUrl } from '../services/mapsService';
 
 interface TripDetailProps {
   trip: Trip;
@@ -15,1398 +16,896 @@ interface TripDetailProps {
   userProfile: UserProfile;
 }
 
-const FALLBACK_IMAGE = 'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=800&auto=format&fit=crop';
-
 const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, onBack, language, darkMode, userProfile }) => {
   const t = translations[language];
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'album' | 'hotels'>(trip.status === 'past' ? 'album' : 'itinerary');
-  const [selectedDate, setSelectedDate] = useState<string>(trip.startDate);
-  
-  // Modals state
-  const [showEventForm, setShowEventForm] = useState(false);
-  const [showFlightForm, setShowFlightForm] = useState(false);
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'photos' | 'info'>('itinerary');
+  const [selectedDate, setSelectedDate] = useState<string>(Object.keys(trip.itinerary).sort()[0] || '');
+  const [showEventModal, setShowEventModal] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
-  const [editingFlightIndex, setEditingFlightIndex] = useState<number | null>(null);
   
-  // Photo Viewing State
-  const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
-  const [photoToDelete, setPhotoToDelete] = useState<string | null>(null);
-  
-  // Photo & Comment state
-  const [commentText, setCommentText] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Flight Edit State
+  const [showFlightModal, setShowFlightModal] = useState(false);
+  const [editingFlightType, setEditingFlightType] = useState<'departure' | 'return' | 'complex' | null>(null);
+  const [editingComplexDate, setEditingComplexDate] = useState<string>('');
+  const [editingComplexIndex, setEditingComplexIndex] = useState<number>(-1);
+  const [flightForm, setFlightForm] = useState<FlightInfo>({ code: '', airport: '', gate: '', transport: '' });
 
-  // AI & Optimization state
+  // Map & AI State
+  const [showMap, setShowMap] = useState(true);
+  const [weather, setWeather] = useState<Record<string, { icon: string, temp: string, condition: string }> | null>(null);
+  const [smartRoute, setSmartRoute] = useState<{ text: string, links: { uri: string; title: string }[] } | null>(null);
   const [isOptimizing, setIsOptimizing] = useState(false);
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [smartRouteResult, setSmartRouteResult] = useState<{ text: string, links: { uri: string, title: string }[] } | null>(null);
-  const [loadingGuideId, setLoadingGuideId] = useState<string | null>(null);
-  const [researchingEventId, setResearchingEventId] = useState<string | null>(null);
-  const [isResearchingAll, setIsResearchingAll] = useState(false);
 
-  // Hotel Search State
-  const [hotelPreferences, setHotelPreferences] = useState('');
-  const [isSearchingHotels, setIsSearchingHotels] = useState(false);
-  const [suggestedHotels, setSuggestedHotels] = useState<Hotel[]>([]);
-
-  // Discovery State
-  const [showDiscovery, setShowDiscovery] = useState(false);
-  const [discoveryQuery, setDiscoveryQuery] = useState('');
+  // Discover Nearby State
+  const [selectedDiscoveryId, setSelectedDiscoveryId] = useState<string | null>(null);
+  const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
   const [discoveryResults, setDiscoveryResults] = useState<any[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
 
-  // Weather State
-  const [weatherData, setWeatherData] = useState<Record<string, { icon: string, temp: string, condition: string }>>({});
-  const [loadingWeather, setLoadingWeather] = useState(false);
-
-  // Map state
-  const [mapUrl, setMapUrl] = useState<string | null>(null);
-  const [mapAllowed, setMapAllowed] = useState(true);
-  const [isMapExpanded, setIsMapExpanded] = useState(false);
-
-  // Form states
-  const [timeMode, setTimeMode] = useState<'exact' | 'period'>('exact');
+  // Event Form State
   const [eventForm, setEventForm] = useState<Partial<ItineraryItem>>({
-    type: 'sightseeing',
-    time: '09:00',
-    endTime: '10:00',
-    period: undefined,
     title: '',
     description: '',
-    url: '',
+    time: '',
+    period: 'morning',
+    type: 'sightseeing',
     estimatedExpense: 0,
-    actualExpense: 0,
-    currency: trip.defaultCurrency || '',
-    spendingDescription: '',
     transportMethod: '',
-    travelDuration: ''
+    url: ''
   });
 
-  const [flightForm, setFlightForm] = useState<FlightInfo>({
-    code: '',
-    gate: '',
-    airport: '',
-    transport: ''
-  });
+  const [aiLoading, setAiLoading] = useState(false);
 
-  const tripDays = useMemo(() => {
-    const start = new Date(trip.startDate);
-    const end = new Date(trip.endDate);
-    const days = [];
-    let curr = new Date(start);
-    while (curr <= end) {
-      days.push(curr.toISOString().split('T')[0]);
-      curr.setDate(curr.getDate() + 1);
+  useEffect(() => {
+    if (!selectedDate && Object.keys(trip.itinerary).length > 0) {
+       setSelectedDate(Object.keys(trip.itinerary).sort()[0]);
     }
-    return days;
-  }, [trip.startDate, trip.endDate]);
+  }, [trip.itinerary]);
 
-  // Determine which flights to show for selected day
-  const currentFlights = useMemo(() => {
-    if (trip.flights && trip.flights[selectedDate]) {
-      return trip.flights[selectedDate];
+  // Fetch Weather once on mount if dates are valid
+  useEffect(() => {
+    if (trip.startDate && trip.endDate && !weather) {
+      GeminiService.getWeatherForecast(trip.location, trip.startDate, trip.endDate)
+        .then(res => setWeather(res))
+        .catch(console.error);
     }
-    // Fallback for older data structure or specific start/end days
-    if (selectedDate === trip.startDate && trip.departureFlight) {
-      return [{ ...trip.departureFlight, label: t.departure }];
-    }
-    if (selectedDate === trip.endDate && trip.returnFlight) {
-      return [{ ...trip.returnFlight, label: t.return }];
-    }
-    return [];
-  }, [trip, selectedDate, t]);
+  }, [trip.id]);
 
-  const currentDayEvents = useMemo(() => {
-    const events = (trip.itinerary && trip.itinerary[selectedDate]) || [];
-    
-    const getSortTime = (item: ItineraryItem) => {
-      if (item.time) return item.time;
-      if (item.period === 'morning') return '07:00';
-      if (item.period === 'afternoon') return '13:00';
-      if (item.period === 'night') return '19:00';
-      return '23:59';
+  const handleTimeChange = (newTime: string) => {
+    setEventForm(prev => {
+      const updates: any = { time: newTime };
+      // Auto-suggest period if user sets a specific time, but allow override
+      if (newTime) {
+         const hour = parseInt(newTime.split(':')[0], 10);
+         if (hour < 12) updates.period = 'morning';
+         else if (hour < 18) updates.period = 'afternoon';
+         else updates.period = 'night';
+      }
+      return { ...prev, ...updates };
+    });
+  };
+
+  const handleSaveEvent = () => {
+    if (!selectedDate || !eventForm.title) return;
+
+    // Use selected period. If explicitly set, respect it.
+    // If no period set, try to derive from time. Default to morning.
+    let finalPeriod = eventForm.period;
+    if (!finalPeriod) {
+        if (eventForm.time) {
+            const hour = parseInt(eventForm.time.split(':')[0], 10);
+            if (hour >= 12 && hour < 18) finalPeriod = 'afternoon';
+            else if (hour >= 18) finalPeriod = 'night';
+            else finalPeriod = 'morning';
+        } else {
+            finalPeriod = 'morning';
+        }
+    }
+
+    const newItem: ItineraryItem = {
+      id: editingEventId || Date.now().toString(),
+      title: eventForm.title || 'New Event',
+      description: eventForm.description || '',
+      time: eventForm.time, // Can be empty string
+      period: finalPeriod as 'morning' | 'afternoon' | 'night',
+      type: eventForm.type || 'sightseeing',
+      estimatedExpense: eventForm.estimatedExpense || 0,
+      actualExpense: 0,
+      currency: trip.defaultCurrency,
+      transportMethod: eventForm.transportMethod,
+      url: eventForm.url,
+      // preserve existing expense parts if editing
+      expenseParts: (editingEventId && trip.itinerary[selectedDate]?.find(i => i.id === editingEventId)?.expenseParts) || []
     };
 
-    return [...events].sort((a, b) => {
-      const timeA = getSortTime(a);
-      const timeB = getSortTime(b);
-      return timeA.localeCompare(timeB);
-    });
-  }, [trip.itinerary, selectedDate]);
-
-  // Fetch Weather
-  useEffect(() => {
-    if (activeTab === 'itinerary' && Object.keys(weatherData).length === 0 && !loadingWeather) {
-      const fetchWeather = async () => {
-        setLoadingWeather(true);
-        try {
-          const data = await GeminiService.getWeatherForecast(trip.location, trip.startDate, trip.endDate);
-          if (data) {
-            setWeatherData(data);
-          }
-        } catch (e) {
-          // Silent fail for weather
-        }
-        setLoadingWeather(false);
-      };
-      fetchWeather();
-    }
-  }, [activeTab, trip.location, trip.startDate, trip.endDate, weatherData, loadingWeather]);
-
-  // Update Map when events change
-  useEffect(() => {
-    if (activeTab === 'itinerary' && currentDayEvents.length > 0) {
-      if (canLoadMap()) {
-        const url = getMapUrl(trip.location, currentDayEvents);
-        setMapUrl(url);
-        setMapAllowed(true);
-      } else {
-        setMapAllowed(false);
-      }
-    } else {
-      setMapUrl(null);
-    }
-  }, [currentDayEvents, trip.location, activeTab]);
-
-  const handleTranslateTrip = async () => {
-    if (isTranslating) return;
-    if (!window.confirm("Use Gemini AI to translate this entire trip (titles, descriptions, events) into your current app language?")) return;
+    const currentItems = trip.itinerary[selectedDate] || [];
+    let newItems;
     
-    setIsTranslating(true);
+    if (editingEventId) {
+      newItems = currentItems.map(item => item.id === editingEventId ? { ...item, ...newItem } : item);
+    } else {
+      newItems = [...currentItems, newItem];
+    }
+    
+    // Sort by period rank then time
+    // Flexible events (no time) appear first within their period block
+    const periodRank = { morning: 0, afternoon: 1, night: 2 };
+    newItems.sort((a, b) => {
+      const rankA = periodRank[a.period || 'morning'];
+      const rankB = periodRank[b.period || 'morning'];
+      if (rankA !== rankB) return rankA - rankB;
+      // If same period, sort by time string (empty strings first)
+      return (a.time || '').localeCompare(b.time || '');
+    });
+
+    onUpdate({
+      ...trip,
+      itinerary: {
+        ...trip.itinerary,
+        [selectedDate]: newItems
+      }
+    });
+
+    setShowEventModal(false);
+    setEditingEventId(null);
+    setEventForm({ title: '', description: '', time: '', period: 'morning', type: 'sightseeing', estimatedExpense: 0 });
+  };
+
+  const handleDeleteEvent = (eventId: string) => {
+    if (!selectedDate) return;
+    const newItems = trip.itinerary[selectedDate].filter(i => i.id !== eventId);
+    onUpdate({
+      ...trip,
+      itinerary: {
+        ...trip.itinerary,
+        [selectedDate]: newItems
+      }
+    });
+    if (selectedDiscoveryId === eventId) setSelectedDiscoveryId(null);
+  };
+
+  const handleEditEvent = (item: ItineraryItem) => {
+    setEditingEventId(item.id);
+    setEventForm({ ...item, period: item.period || 'morning' }); // Ensure period is set
+    setShowEventModal(true);
+  };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        if (ev.target?.result) {
+          const newPhoto: Photo = {
+            id: Date.now().toString(),
+            url: ev.target.result as string,
+            caption: 'New Memory',
+            date: new Date().toISOString(),
+            tags: [],
+            type: 'image'
+          };
+          onUpdate({ ...trip, photos: [newPhoto, ...trip.photos] });
+        }
+      };
+      reader.readAsDataURL(e.target.files[0]);
+    }
+  };
+
+  const openAiLogistics = async () => {
+    if (!eventForm.title) return;
+    setAiLoading(true);
     try {
-      const translatedTrip = await GeminiService.translateTrip(trip, language);
-      if (translatedTrip) {
-        onUpdate(translatedTrip);
-      } else {
-        alert("Translation failed. Please try again.");
+      // Find previous event for logistics context
+      const currentItems = trip.itinerary[selectedDate] || [];
+      const prevItem = currentItems.length > 0 ? currentItems[currentItems.length - 1].title : null;
+
+      const logistics = await GeminiService.getEventLogistics(trip.location, eventForm as ItineraryItem, prevItem, language);
+      if (logistics) {
+        setEventForm(prev => ({
+          ...prev,
+          estimatedExpense: logistics.price !== undefined ? logistics.price : prev.estimatedExpense,
+          transportMethod: logistics.transportShort || prev.transportMethod,
+          description: (prev.description ? prev.description + '\n\n' : '') + `📍 Logistics: ${logistics.details || ''}`
+        }));
       }
     } catch (e) {
       console.error(e);
-      alert("Translation service error.");
     } finally {
-      setIsTranslating(false);
+      setAiLoading(false);
     }
   };
 
   const handleSmartRoute = async () => {
-    if (currentDayEvents.length < 2) return;
     setIsOptimizing(true);
+    setSmartRoute(null);
     try {
-      const result = await GeminiService.getMapRoute(trip.location, currentDayEvents, language);
-      setSmartRouteResult(result);
+      const result = await GeminiService.getMapRoute(trip.location, trip.itinerary[selectedDate] || [], language);
+      setSmartRoute(result);
     } catch (e) {
-      alert("AI Route optimization unavailable. Check your connection or region.");
+      console.error(e);
+      alert('Could not generate smart route. Please try again.');
     } finally {
       setIsOptimizing(false);
     }
   };
 
-  const handleHotelSearch = async () => {
-    setIsSearchingHotels(true);
-    setSuggestedHotels([]);
-    
-    // Flatten itinerary for analysis
-    const allEvents = Object.values(trip.itinerary).flat() as ItineraryItem[];
-    
-    try {
-      const results = await GeminiService.recommendHotels(
-        trip.location, 
-        allEvents, 
-        hotelPreferences,
-        language
-      );
-      if (results && results.length > 0) {
-        setSuggestedHotels(results);
-      } else {
-        alert("No hotels found. Try adjusting your preferences.");
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Failed to find hotels. Please check connection.");
-    } finally {
-      setIsSearchingHotels(false);
-    }
-  };
+  const handleDiscoverNearby = async (category: string) => {
+    const originEvent = trip.itinerary[selectedDate]?.find(i => i.id === selectedDiscoveryId);
+    if (!originEvent) return;
 
-  const handleAddHotel = (hotel: Hotel) => {
-    const existingHotels = trip.hotels || [];
-    // Avoid duplicates
-    if (existingHotels.find(h => h.name === hotel.name)) return;
-    
-    onUpdate({ ...trip, hotels: [...existingHotels, hotel] });
-    // Remove from suggested list visually
-    setSuggestedHotels(prev => prev.filter(h => h.id !== hotel.id));
-  };
-
-  const handleDeleteHotel = (hotelId: string) => {
-    const updatedHotels = (trip.hotels || []).filter(h => h.id !== hotelId);
-    onUpdate({ ...trip, hotels: updatedHotels });
-  };
-
-  const handleAiGuide = async (item: ItineraryItem) => {
-    setLoadingGuideId(item.id);
-    try {
-      const guideData = await GeminiService.getTourGuideInfo(trip.location, item, language);
-      if (guideData) {
-        const updatedEvents = trip.itinerary[selectedDate].map(e => 
-          e.id === item.id ? { ...e, guideInfo: guideData } : e
-        );
-        onUpdate({
-          ...trip,
-          itinerary: { ...trip.itinerary, [selectedDate]: updatedEvents }
-        });
-      } else {
-        throw new Error("No data returned");
-      }
-    } catch (e) {
-      alert("AI Guide unavailable. Please try again later.");
-    } finally {
-      setLoadingGuideId(null);
-    }
-  };
-
-  const handleResearchLogistics = async (item: ItineraryItem, prevItem: ItineraryItem | null) => {
-    setResearchingEventId(item.id);
-    try {
-      const result = await GeminiService.getEventLogistics(trip.location, item, prevItem?.title || null, language);
-      if (result) {
-        const updatedItem = { ...item };
-        if (result.price !== undefined) {
-          updatedItem.estimatedExpense = result.price;
-        }
-        if (result.currency) {
-          updatedItem.currency = result.currency;
-        }
-        if (result.transportShort) {
-          updatedItem.transportMethod = result.transportShort;
-        }
-        if (result.details) {
-          const prefix = updatedItem.description ? updatedItem.description + "\n\n" : "";
-          if (!updatedItem.description.includes("📍 Logistics")) {
-             updatedItem.description = prefix + "📍 Logistics: " + result.details;
-          }
-        }
-
-        const updatedEvents = trip.itinerary[selectedDate].map(e => e.id === item.id ? updatedItem : e);
-        onUpdate({ ...trip, itinerary: { ...trip.itinerary, [selectedDate]: updatedEvents } });
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Research failed. Please check connection.");
-    } finally {
-      setResearchingEventId(null);
-    }
-  };
-
-  const handleResearchAll = async () => {
-    if (isResearchingAll) return;
-    setIsResearchingAll(true);
-    
-    // Identify items that need research (skip transport items or those with logistics already)
-    const itemsToResearch = currentDayEvents.filter(item => 
-      item.type !== 'transport' && 
-      (!item.description || !item.description.includes("📍 Logistics"))
-    );
-
-    if (itemsToResearch.length === 0) {
-      alert("All items already researched!");
-      setIsResearchingAll(false);
-      return;
-    }
-
-    try {
-      // Run requests in parallel
-      const results = await Promise.all(itemsToResearch.map(async (item, index) => {
-         // Try to find the previous item in the full list to give context
-         const fullIndex = currentDayEvents.findIndex(e => e.id === item.id);
-         const prevItem = fullIndex > 0 ? currentDayEvents[fullIndex - 1] : null;
-         
-         const result = await GeminiService.getEventLogistics(trip.location, item, prevItem?.title || null, language);
-         return { id: item.id, result };
-      }));
-
-      // Apply updates
-      const updatedEvents = currentDayEvents.map(item => {
-         const res = results.find(r => r.id === item.id);
-         if (res && res.result) {
-            const updatedItem = { ...item };
-            const { price, currency, transportShort, details } = res.result;
-            if (price !== undefined) updatedItem.estimatedExpense = price;
-            if (currency) updatedItem.currency = currency;
-            if (transportShort) updatedItem.transportMethod = transportShort;
-            if (details) {
-               updatedItem.description = (updatedItem.description || "") + "\n\n📍 Logistics: " + details;
-            }
-            return updatedItem;
-         }
-         return item;
-      });
-
-      onUpdate({
-        ...trip,
-        itinerary: { ...trip.itinerary, [selectedDate]: updatedEvents }
-      });
-
-    } catch (e) {
-      console.error(e);
-      alert("Batch research completed with some errors.");
-    } finally {
-      setIsResearchingAll(false);
-    }
-  };
-
-  const handleDiscover = async (query: string) => {
-    if (!query.trim()) return;
     setIsDiscovering(true);
     setDiscoveryResults([]);
     try {
-      const places = await GeminiService.discoverPlaces(trip.location, query, language);
-      if (places && places.length > 0) {
-        setDiscoveryResults(places);
-      } else {
-        // Soft error or empty state handled in UI
-      }
+      const query = category === 'eating' ? 'restaurants' : category === 'shopping' ? 'shops' : 'attractions';
+      const results = await GeminiService.discoverPlaces(trip.location, `${query} near ${originEvent.title}`, language);
+      setDiscoveryResults(results);
     } catch (e) {
       console.error(e);
-      alert("Discovery failed. AI features may be unavailable in your current region.");
     } finally {
       setIsDiscovering(false);
     }
   };
 
-  const handleAddDiscoveryItem = (place: any) => {
+  const handleAddDiscovery = (place: any) => {
     const newItem: ItineraryItem = {
       id: Date.now().toString(),
       title: place.title,
-      description: place.description,
+      description: place.description || 'Discovered nearby',
       type: place.type || 'sightseeing',
       estimatedExpense: place.estimatedExpense || 0,
       actualExpense: 0,
-      currency: trip.defaultCurrency || '$',
-      time: '12:00',
-      endTime: '13:00'
+      currency: trip.defaultCurrency,
+      time: '', // User to set time
+      period: 'afternoon'
     };
-    setEventForm(newItem);
-    setTimeMode('exact');
-    setEditingEventId(null);
-    setShowDiscovery(false);
-    setShowEventForm(true);
-  };
-
-  const handleEventSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
     
-    // Clean data based on mode
-    const cleanedEventForm = { ...eventForm };
-    if (timeMode === 'exact') {
-      cleanedEventForm.period = undefined;
-    } else {
-      cleanedEventForm.time = undefined;
-      cleanedEventForm.endTime = undefined;
-    }
-
-    const { id: _, ...restForm } = cleanedEventForm as any;
-
-    const newEvent: ItineraryItem = {
-      id: editingEventId || Date.now().toString(),
-      ...restForm
-    };
-
-    const currentEvents = trip.itinerary[selectedDate] || [];
-    let updatedEvents;
-    if (editingEventId) {
-      updatedEvents = currentEvents.map(ev => ev.id === editingEventId ? newEvent : ev);
-    } else {
-      updatedEvents = [...currentEvents, newEvent];
-    }
-
+    const currentItems = trip.itinerary[selectedDate] || [];
+    const newItems = [...currentItems, newItem];
+    // Sort logic handled in next update or render
     onUpdate({
       ...trip,
-      itinerary: { ...trip.itinerary, [selectedDate]: updatedEvents }
-    });
-    
-    setShowEventForm(false);
-    setEditingEventId(null);
-    setEventForm({ type: 'sightseeing', estimatedExpense: 0, actualExpense: 0, currency: trip.defaultCurrency });
-  };
-
-  const deleteEvent = (id: string) => {
-    const updatedEvents = (trip.itinerary[selectedDate] || []).filter(e => e.id !== id);
-    onUpdate({ ...trip, itinerary: { ...trip.itinerary, [selectedDate]: updatedEvents } });
-  };
-
-  const handleFlightSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newFlight = { ...flightForm };
-    
-    const allFlights = trip.flights || {};
-    const currentDayFlights = [...currentFlights];
-
-    if (editingFlightIndex !== null) {
-      currentDayFlights[editingFlightIndex] = newFlight;
-    } else {
-      currentDayFlights.push(newFlight);
-    }
-
-    const updatedFlights = { ...allFlights, [selectedDate]: currentDayFlights };
-    
-    let updates: Partial<Trip> = { flights: updatedFlights };
-    if (selectedDate === trip.startDate) updates.departureFlight = currentDayFlights[0];
-    if (selectedDate === trip.endDate) updates.returnFlight = currentDayFlights[0];
-
-    onUpdate({ ...trip, ...updates });
-    setShowFlightForm(false);
-    setEditingFlightIndex(null);
-    setFlightForm({ code: '', gate: '', airport: '', transport: '' });
-  };
-
-  const deleteFlight = (index: number) => {
-    const allFlights = trip.flights || {};
-    const currentDayFlights = [...currentFlights];
-    currentDayFlights.splice(index, 1);
-    
-    let updates: Partial<Trip> = { 
-      flights: { ...allFlights, [selectedDate]: currentDayFlights } 
-    };
-    
-    if (selectedDate === trip.startDate) updates.departureFlight = currentDayFlights[0] || undefined;
-    if (selectedDate === trip.endDate) updates.returnFlight = currentDayFlights[0] || undefined;
-    
-    onUpdate({ ...trip, ...updates });
-  };
-
-  // --- Album Helper Functions ---
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const files = Array.from(e.target.files);
-      
-      const readFile = (file: File): Promise<Photo> => {
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            resolve({
-              id: `p-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              url: event.target?.result as string,
-              caption: '',
-              date: new Date().toISOString(),
-              tags: [],
-              type: file.type.startsWith('video') ? 'video' : 'image',
-              isFavorite: false,
-              comments: []
-            });
-          };
-          reader.readAsDataURL(file);
-        });
-      };
-
-      Promise.all(files.map(readFile)).then(photos => {
-        onUpdate({ ...trip, photos: [...trip.photos, ...photos] });
-        if (fileInputRef.current) fileInputRef.current.value = '';
-      });
-    }
-  };
-
-  const handleAutoFillPhotos = () => {
-    // Basic travel placeholder images
-    const stockPhotos: Photo[] = [
-      { id: `stock-${Date.now()}-1`, url: 'https://images.unsplash.com/photo-1476514525535-07fb3b4ae5f1?q=80&w=800', caption: 'Adventure Time', date: new Date().toISOString(), tags: ['Stock'], isFavorite: false, comments: [] },
-      { id: `stock-${Date.now()}-2`, url: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?q=80&w=800', caption: 'Journey', date: new Date().toISOString(), tags: ['Stock'], isFavorite: false, comments: [] },
-      { id: `stock-${Date.now()}-3`, url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?q=80&w=800', caption: 'Beautiful Scenery', date: new Date().toISOString(), tags: ['Stock'], isFavorite: false, comments: [] },
-    ];
-    onUpdate({ ...trip, photos: [...trip.photos, ...stockPhotos] });
-  };
-
-  const handleDeletePhoto = () => {
-    if (photoToDelete) {
-      const updatedPhotos = trip.photos.filter(p => p.id !== photoToDelete);
-      onUpdate({ ...trip, photos: updatedPhotos });
-      setPhotoToDelete(null);
-      if (selectedPhoto && selectedPhoto.id === photoToDelete) {
-        setSelectedPhoto(null);
+      itinerary: {
+        ...trip.itinerary,
+        [selectedDate]: newItems
       }
+    });
+    setShowDiscoveryModal(false);
+  };
+
+  // --- Flight Handlers ---
+  const handleOpenFlightModal = (type: 'departure' | 'return' | 'complex', date?: string, index?: number) => {
+    setEditingFlightType(type);
+    if (type === 'complex' && date !== undefined && index !== undefined) {
+      setEditingComplexDate(date);
+      setEditingComplexIndex(index);
+      const flightsOnDate = trip.flights?.[date] || [];
+      const f = flightsOnDate[index];
+      setFlightForm(f || { code: '', gate: '', airport: '', transport: '' });
+    } else {
+      const existing = type === 'departure' ? trip.departureFlight : trip.returnFlight;
+      setFlightForm(existing || { code: '', gate: '', airport: '', transport: '' });
+    }
+    setShowFlightModal(true);
+  };
+
+  const handleSaveFlight = () => {
+    if (!editingFlightType) return;
+    
+    const updatedTrip = { ...trip };
+    
+    if (editingFlightType === 'departure') {
+      updatedTrip.departureFlight = flightForm;
+    } else if (editingFlightType === 'return') {
+      updatedTrip.returnFlight = flightForm;
+    } else if (editingFlightType === 'complex') {
+      const flights = { ...(updatedTrip.flights || {}) };
+      const list = [...(flights[editingComplexDate] || [])];
+      
+      if (editingComplexIndex >= 0) {
+        list[editingComplexIndex] = { ...list[editingComplexIndex], ...flightForm };
+      }
+      
+      flights[editingComplexDate] = list;
+      updatedTrip.flights = flights;
+    }
+    
+    onUpdate(updatedTrip);
+    setShowFlightModal(false);
+  };
+
+  const handleDeleteFlight = (type: 'departure' | 'return' | 'complex', date?: string, index?: number) => {
+    if (window.confirm("Are you sure you want to delete this flight details?")) {
+      const updatedTrip = { ...trip };
+      
+      if (type === 'departure') {
+        delete updatedTrip.departureFlight;
+      } else if (type === 'return') {
+        delete updatedTrip.returnFlight;
+      } else if (type === 'complex' && date && index !== undefined) {
+        const flights = { ...(updatedTrip.flights || {}) };
+        const list = [...(flights[date] || [])];
+        list.splice(index, 1);
+        if (list.length === 0) {
+          delete flights[date];
+        } else {
+          flights[date] = list;
+        }
+        updatedTrip.flights = flights;
+      }
+      
+      onUpdate(updatedTrip);
     }
   };
 
-  const toggleFavorite = (photoId: string) => {
-    const updatedPhotos = trip.photos.map(p => 
-      p.id === photoId ? { ...p, isFavorite: !p.isFavorite } : p
-    );
-    const updatedPhoto = updatedPhotos.find(p => p.id === photoId);
-    onUpdate({ ...trip, photos: updatedPhotos });
-    if (selectedPhoto && selectedPhoto.id === photoId && updatedPhoto) {
-      setSelectedPhoto(updatedPhoto);
-    }
+  const sortedDates = Object.keys(trip.itinerary).sort();
+  const currentItinerary = trip.itinerary[selectedDate] || [];
+
+  const groupedEvents = {
+    morning: currentItinerary.filter(i => (i.period === 'morning' || (!i.period && (!i.time || parseInt(i.time) < 12)))),
+    afternoon: currentItinerary.filter(i => (i.period === 'afternoon' || (!i.period && i.time && parseInt(i.time) >= 12 && parseInt(i.time) < 18))),
+    night: currentItinerary.filter(i => (i.period === 'night' || (!i.period && i.time && parseInt(i.time) >= 18)))
   };
 
-  const handleUpdateCaption = (newCaption: string) => {
-    if (!selectedPhoto) return;
-    const updatedPhotos = trip.photos.map(p => 
-      p.id === selectedPhoto.id ? { ...p, caption: newCaption } : p
-    );
-    onUpdate({ ...trip, photos: updatedPhotos });
-    setSelectedPhoto({ ...selectedPhoto, caption: newCaption });
-  };
-
-  const handleAddComment = () => {
-    if (!selectedPhoto || !commentText.trim()) return;
-    const newCommentObj: Comment = {
-      id: Date.now().toString(),
-      text: commentText,
-      author: userProfile.name || 'User',
-      date: new Date().toISOString()
-    };
-    
-    const updatedPhotos = trip.photos.map(p => 
-      p.id === selectedPhoto.id ? { ...p, comments: [...(p.comments || []), newCommentObj] } : p
-    );
-    
-    const updatedPhoto = updatedPhotos.find(p => p.id === selectedPhoto.id);
-    onUpdate({ ...trip, photos: updatedPhotos });
-    if (updatedPhoto) setSelectedPhoto(updatedPhoto);
-    setCommentText('');
-  };
+  const renderEventCard = (item: ItineraryItem) => (
+    <div 
+      key={item.id} 
+      onClick={() => setSelectedDiscoveryId(selectedDiscoveryId === item.id ? null : item.id)}
+      className={`group relative p-5 rounded-[2rem] border transition-all cursor-pointer ${selectedDiscoveryId === item.id ? 'ring-2 ring-indigo-500 scale-[1.02] shadow-xl z-10' : 'hover:scale-[1.01] hover:shadow-lg'} ${darkMode ? 'bg-zinc-900 border-zinc-800 hover:border-zinc-700' : 'bg-white border-zinc-100'}`}
+    >
+      <div className="flex items-start gap-4">
+        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shadow-inner shrink-0 ${
+          item.type === 'eating' ? 'bg-orange-100 text-orange-500' :
+          item.type === 'sightseeing' ? 'bg-blue-100 text-blue-500' :
+          item.type === 'shopping' ? 'bg-pink-100 text-pink-500' :
+          item.type === 'transport' ? 'bg-zinc-100 text-zinc-500' : 'bg-purple-100 text-purple-500'
+        }`}>
+          {item.type === 'eating' && '🍱'}
+          {item.type === 'sightseeing' && '🏛️'}
+          {item.type === 'shopping' && '🛍️'}
+          {item.type === 'transport' && '🚗'}
+          {item.type === 'other' && '✨'}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex justify-between items-start">
+            <h4 className="font-black text-lg truncate pr-2">{item.title}</h4>
+            <span className="text-xs font-mono font-bold opacity-50 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-lg whitespace-nowrap">{item.time || 'Flexible'}</span>
+          </div>
+          {item.description && <p className="text-sm opacity-70 mt-1 line-clamp-2">{item.description}</p>}
+          <div className="flex gap-3 mt-3">
+             {item.estimatedExpense > 0 && (
+               <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400">
+                 {item.currency}{item.estimatedExpense}
+               </span>
+             )}
+             {item.transportMethod && (
+               <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                 {item.transportMethod}
+               </span>
+             )}
+          </div>
+        </div>
+      </div>
+      
+      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
+        <button onClick={(e) => { e.stopPropagation(); handleEditEvent(item); }} className="p-2 bg-white dark:bg-zinc-800 rounded-xl shadow-lg hover:text-indigo-500">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+        </button>
+        <button onClick={(e) => { e.stopPropagation(); handleDeleteEvent(item.id); }} className="p-2 bg-white dark:bg-zinc-800 rounded-xl shadow-lg hover:text-rose-500">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+        </button>
+      </div>
+    </div>
+  );
 
   return (
-    <div className={`min-h-screen pb-20 ${darkMode ? 'text-white' : 'text-zinc-900'}`}>
-      
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 pb-20">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6 sticky top-20 z-30 py-4 bg-inherit backdrop-blur-md">
-        <button onClick={onBack} className={`p-2 rounded-full ${darkMode ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}>
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7"/></svg>
-        </button>
-        <div className="text-center">
-          <h2 className="text-xl font-black">{trip.title}</h2>
-          <p className="text-xs font-bold opacity-50">{trip.startDate} - {trip.endDate}</p>
+      <div className="relative h-64 md:h-80 rounded-[2.5rem] overflow-hidden shadow-2xl mb-8 group">
+        <img src={trip.coverImage} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt={trip.title} />
+        <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
+        <div className="absolute top-6 left-6 z-10">
+          <button onClick={onBack} className="p-3 bg-white/20 backdrop-blur-md rounded-2xl text-white hover:bg-white/30 transition-all">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
+          </button>
         </div>
-        <div className="flex gap-2">
-          <button 
-            onClick={handleTranslateTrip}
-            disabled={isTranslating}
-            className={`p-2 rounded-full transition-all ${darkMode ? 'hover:bg-zinc-800 text-indigo-400' : 'hover:bg-zinc-100 text-indigo-600'} ${isTranslating ? 'animate-pulse opacity-50' : ''}`}
-            title="Translate Trip Content"
-          >
-            {isTranslating ? (
-              <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-            ) : (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"/></svg>
-            )}
-          </button>
-          <button className={`p-2 rounded-full ${darkMode ? 'hover:bg-zinc-800' : 'hover:bg-zinc-100'}`}>
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 100-2.684 3 3 0 000 2.684zm0 12.684a3 3 0 100-2.684 3 3 0 000 2.684z"/></svg>
-          </button>
+        <div className="absolute bottom-8 left-8 right-8 text-white">
+          <h1 className="text-4xl font-black mb-2 tracking-tight">{trip.title}</h1>
+          <div className="flex items-center gap-4 text-sm font-bold opacity-90">
+            <span className="bg-white/20 backdrop-blur-md px-3 py-1 rounded-lg">📍 {trip.location}</span>
+            <span>📅 {trip.startDate} - {trip.endDate}</span>
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className={`flex p-1 rounded-2xl mb-8 ${darkMode ? 'bg-zinc-900' : 'bg-zinc-100'}`}>
-        <button onClick={() => setActiveTab('itinerary')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'itinerary' ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-500'}`}>{t.itinerary}</button>
-        <button onClick={() => setActiveTab('hotels')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'hotels' ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-500'}`}>{t.hotels}</button>
-        <button onClick={() => setActiveTab('album')} className={`flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'album' ? 'bg-indigo-600 text-white shadow-lg' : 'text-zinc-500'}`}>{t.album}</button>
+      <div className="flex gap-2 mb-8 overflow-x-auto no-scrollbar">
+        {(['itinerary', 'photos', 'info'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === tab 
+              ? 'bg-indigo-600 text-white shadow-lg scale-105' 
+              : (darkMode ? 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800' : 'bg-white text-zinc-400 hover:bg-zinc-50')}`}
+          >
+            {tab === 'itinerary' && t.itinerary}
+            {tab === 'photos' && t.tripAlbum}
+            {tab === 'info' && t.flightDetails}
+          </button>
+        ))}
       </div>
 
-      {/* ALBUM VIEW */}
-      {activeTab === 'album' && (
-        <div className="space-y-6 animate-in slide-in-from-right-4">
-           {/* Add Photo Button Area */}
-           <div 
-             onClick={() => fileInputRef.current?.click()}
-             className={`border-4 border-dashed rounded-[2rem] aspect-[16/9] sm:aspect-[4/1] flex flex-col items-center justify-center cursor-pointer transition-all ${darkMode ? 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900' : 'border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50'}`}
-           >
-             <div className="w-16 h-16 rounded-full bg-indigo-600 text-white flex items-center justify-center shadow-xl mb-4">
-               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4"/></svg>
-             </div>
-             <p className="font-black uppercase tracking-widest text-sm opacity-50">{t.importMedia}</p>
-             <input type="file" multiple accept="image/*,video/*" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
-           </div>
-
-           {/* Auto Fill Button (visible if few photos) */}
-           {trip.photos.length < 3 && (
-             <button 
-               onClick={handleAutoFillPhotos}
-               className={`w-full py-3 rounded-2xl border-2 border-dashed font-black uppercase tracking-widest text-xs flex items-center justify-center gap-2 ${darkMode ? 'border-zinc-800 text-zinc-500 hover:bg-zinc-900' : 'border-zinc-200 text-zinc-400 hover:bg-zinc-50'}`}
-             >
-               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h14a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-               Auto-Fill Sample Photos
-             </button>
-           )}
-
-           {/* Photo Grid */}
-           {trip.photos.length === 0 ? (
-             <div className="text-center py-20 opacity-30">
-               <p className="font-bold">No photos yet.</p>
-             </div>
-           ) : (
-             <div className="columns-2 md:columns-3 gap-4 space-y-4">
-               {trip.photos.map(photo => (
-                 <div 
-                   key={photo.id} 
-                   className="break-inside-avoid relative group rounded-2xl overflow-hidden shadow-md cursor-pointer"
-                   onClick={() => setSelectedPhoto(photo)}
-                 >
-                   {photo.type === 'video' ? (
-                     <div className="relative">
-                       <video src={photo.url} className="w-full object-cover" />
-                       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                         <div className="w-10 h-10 bg-black/50 rounded-full flex items-center justify-center backdrop-blur-sm">
-                           <svg className="w-5 h-5 text-white ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                         </div>
-                       </div>
-                     </div>
-                   ) : (
-                     <img 
-                       src={photo.url} 
-                       alt={photo.caption}
-                       className="w-full object-cover transition-transform duration-500 group-hover:scale-105" 
-                       onError={(e) => {
-                         (e.target as HTMLImageElement).src = FALLBACK_IMAGE;
-                       }}
-                     />
-                   )}
-                   
-                   {/* Overlay - now just for info, actions moved to detail view */}
-                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-4">
-                      {photo.caption && <p className="text-white text-xs font-bold truncate drop-shadow-md">{photo.caption}</p>}
-                      <p className="text-white/60 text-[10px] font-black uppercase tracking-widest">{new Date(photo.date).toLocaleDateString()}</p>
-                   </div>
-                   
-                   {/* Quick Delete Trigger */}
-                   <button 
-                     onClick={(e) => { e.stopPropagation(); setPhotoToDelete(photo.id); }} 
-                     className="absolute top-2 right-2 p-2 bg-black/50 hover:bg-rose-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all z-10"
-                   >
-                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                   </button>
-                 </div>
-               ))}
-             </div>
-           )}
-        </div>
-      )}
-
-      {/* HOTELS VIEW */}
-      {activeTab === 'hotels' && (
-        <div className="space-y-8 animate-in slide-in-from-right-4">
-          
-          {/* AI Search Section */}
-          <div className={`p-6 rounded-[2.5rem] border-2 shadow-xl ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-              </div>
-              <div>
-                <h3 className="text-xl font-black">{t.findHotels}</h3>
-                <p className="text-xs opacity-60">Analyze your full itinerary to find convenient stays.</p>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.hotelPreferences}</label>
-                <textarea 
-                  value={hotelPreferences}
-                  onChange={(e) => setHotelPreferences(e.target.value)}
-                  placeholder={t.hotelPlaceholder}
-                  rows={2}
-                  className={`w-full p-4 rounded-2xl border-2 font-bold text-sm resize-none outline-none ${darkMode ? 'bg-black border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
-                />
-              </div>
-              <button 
-                onClick={handleHotelSearch}
-                disabled={isSearchingHotels}
-                className="w-full py-4 rounded-2xl font-black uppercase tracking-widest bg-indigo-600 text-white shadow-xl hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+      {/* Itinerary View */}
+      {activeTab === 'itinerary' && (
+        <div className="space-y-6">
+          <div className="flex gap-3 overflow-x-auto pb-4 no-scrollbar">
+            {sortedDates.map((date, index) => (
+              <button
+                key={date}
+                onClick={() => setSelectedDate(date)}
+                className={`flex-shrink-0 w-16 h-20 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all border-2 ${selectedDate === date 
+                  ? 'border-indigo-600 bg-indigo-600 text-white shadow-xl scale-110' 
+                  : (darkMode ? 'border-zinc-800 bg-zinc-900 text-zinc-500 hover:border-zinc-700' : 'border-zinc-100 bg-white text-zinc-400 hover:border-zinc-200')}`}
               >
-                {isSearchingHotels ? (
-                  <><span className="animate-spin">⏳</span> {t.analyzingPlan}</>
-                ) : (
-                  <>🔍 {t.findHotels}</>
+                <span className="text-[10px] font-black uppercase">Day</span>
+                <span className="text-xl font-black">{index + 1}</span>
+                {weather && weather[date] && (
+                  <span className="text-xs">{weather[date].icon}</span>
                 )}
               </button>
-            </div>
+            ))}
           </div>
 
-          {/* Suggested Hotels */}
-          {suggestedHotels.length > 0 && (
-            <div className="space-y-4">
-              <h4 className="text-sm font-black uppercase tracking-widest opacity-70 ml-2">{t.recommendedHotels}</h4>
-              <div className="grid grid-cols-1 gap-4">
-                {suggestedHotels.map(hotel => (
-                  <div key={hotel.id} className={`p-5 rounded-[2rem] border-2 border-indigo-500/30 bg-indigo-500/5 animate-in slide-in-from-bottom-4`}>
-                    <div className="flex justify-between items-start mb-2">
-                      <h5 className="font-black text-lg">{hotel.name}</h5>
-                      <span className="text-sm font-black bg-white dark:bg-black px-3 py-1 rounded-full shadow-sm">{hotel.price}</span>
+          {/* Map & Weather Section - Collapsible */}
+          <div className={`rounded-[2.5rem] overflow-hidden border-2 transition-all duration-500 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100 shadow-xl'}`}>
+             <div 
+               className="p-6 flex justify-between items-center cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+               onClick={() => setShowMap(!showMap)}
+             >
+                <div className="flex items-center gap-3">
+                   <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 rounded-xl">
+                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+                   </div>
+                   <h3 className="font-black text-lg">Map & Weather</h3>
+                </div>
+                <svg className={`w-5 h-5 transition-transform duration-300 ${showMap ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7"/></svg>
+             </div>
+             
+             {showMap && (
+               <div className="animate-in slide-in-from-top-4 duration-300">
+                 {/* Weather Strip */}
+                 {weather && weather[selectedDate] && (
+                   <div className="px-6 pb-6 flex items-center gap-4">
+                      <div className="text-4xl">{weather[selectedDate].icon}</div>
+                      <div>
+                        <div className="font-black text-xl">{weather[selectedDate].temp}</div>
+                        <div className="text-xs opacity-60 font-bold uppercase tracking-widest">{weather[selectedDate].condition}</div>
+                      </div>
+                   </div>
+                 )}
+
+                 {/* Google Map Embed */}
+                 <div className="aspect-video w-full bg-gray-100 dark:bg-zinc-800">
+                    <iframe
+                      width="100%"
+                      height="100%"
+                      style={{ border: 0 }}
+                      loading="lazy"
+                      allowFullScreen
+                      src={getMapUrl(trip.location, currentItinerary)}
+                    ></iframe>
+                 </div>
+
+                 {/* Smart Route AI */}
+                 <div className="p-6 space-y-4">
+                    <div className="flex justify-between items-center">
+                       <h4 className="font-bold text-sm uppercase tracking-widest opacity-60">{t.smartRoute}</h4>
+                       <button 
+                         onClick={handleSmartRoute}
+                         disabled={isOptimizing}
+                         className="text-xs font-black text-indigo-500 hover:text-indigo-600 flex items-center gap-1 disabled:opacity-50"
+                       >
+                         {isOptimizing ? t.optimizing : '✨ Optimize Route'}
+                       </button>
                     </div>
-                    <p className="text-sm opacity-80 mb-3">{hotel.description}</p>
-                    {hotel.reason && (
-                      <div className="mb-3 p-3 rounded-xl bg-white/50 dark:bg-black/20 text-xs italic opacity-70">
-                        💡 {hotel.reason}
+                    
+                    {smartRoute && (
+                      <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 text-sm space-y-3 animate-in fade-in">
+                        <p className="leading-relaxed whitespace-pre-wrap">{smartRoute.text}</p>
+                        {smartRoute.links && smartRoute.links.length > 0 && (
+                          <div className="flex flex-wrap gap-2 pt-2">
+                            {smartRoute.links.map((link, i) => (
+                              <a 
+                                key={i} 
+                                href={link.uri} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="px-3 py-1.5 rounded-lg bg-white dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300 text-xs font-bold shadow-sm hover:shadow-md transition-all flex items-center gap-1"
+                              >
+                                📍 {link.title}
+                              </a>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
-                    <div className="flex flex-wrap gap-2 mb-4">
-                      {hotel.rating && <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">⭐ {hotel.rating}</span>}
-                      {hotel.amenities.map(a => (
-                        <span key={a} className="text-[10px] font-bold px-2 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 opacity-70">{a}</span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      {hotel.bookingUrl && (
-                        <a href={hotel.bookingUrl} target="_blank" rel="noreferrer" className="flex-1 py-3 text-center rounded-xl bg-white dark:bg-zinc-800 font-bold text-xs shadow-sm hover:shadow-md transition-all">
-                          {t.bookNow}
-                        </a>
-                      )}
-                      <button onClick={() => handleAddHotel(hotel)} className="flex-[2] py-3 rounded-xl bg-indigo-600 text-white font-bold text-xs shadow-lg hover:bg-indigo-700 transition-all">
-                        + Add to Trip
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                 </div>
+               </div>
+             )}
+          </div>
+
+          <div className="space-y-4 min-h-[300px]">
+            <div className="flex justify-between items-center px-2">
+              <h3 className="text-xl font-black">{new Date(selectedDate).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+              <button 
+                onClick={() => {
+                  setEditingEventId(null);
+                  setEventForm({ title: '', description: '', time: '', period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency });
+                  setShowEventModal(true);
+                }}
+                className="bg-black dark:bg-white text-white dark:text-black px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:scale-105 transition-transform"
+              >
+                + {t.addEvent}
+              </button>
+            </div>
+
+            {currentItinerary.length === 0 ? (
+              <div className={`p-12 text-center rounded-[2.5rem] border-2 border-dashed ${darkMode ? 'border-zinc-800 text-zinc-600' : 'border-zinc-200 text-zinc-400'}`}>
+                <p className="font-bold">No events planned for this day.</p>
               </div>
-            </div>
-          )}
-
-          {/* Saved Hotels List */}
-          {trip.hotels && trip.hotels.length > 0 && (
-            <div className="space-y-4 pt-4 border-t dark:border-zinc-800">
-              <h4 className="text-sm font-black uppercase tracking-widest opacity-70 ml-2">My Stays</h4>
-              {trip.hotels.map(hotel => (
-                <div key={hotel.id} className={`p-5 rounded-[2rem] border-2 group ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-                  <div className="flex justify-between items-start mb-2">
-                    <h5 className="font-black text-lg">{hotel.name}</h5>
-                    <button onClick={() => handleDeleteHotel(hotel.id)} className="text-zinc-400 hover:text-rose-500 transition-colors">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    </button>
+            ) : (
+              <div className="space-y-8">
+                {groupedEvents.morning.length > 0 && (
+                  <div className="space-y-4 animate-in slide-in-from-left-4 duration-500 delay-100">
+                    <div className="flex items-center gap-2 px-2">
+                      <span className="text-xl">🌅</span>
+                      <h4 className="font-black uppercase tracking-widest text-sm opacity-60">{t.morning}</h4>
+                    </div>
+                    {groupedEvents.morning.map(renderEventCard)}
                   </div>
-                  <p className="text-xs opacity-60 mb-2">{hotel.address}</p>
-                  <p className="text-sm font-bold text-indigo-500 mb-2">{hotel.price}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {hotel.amenities.slice(0, 3).map(a => (
-                      <span key={a} className="text-[9px] font-bold px-2 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 opacity-60">{a}</span>
-                    ))}
+                )}
+                {groupedEvents.afternoon.length > 0 && (
+                  <div className="space-y-4 animate-in slide-in-from-left-4 duration-500 delay-200">
+                    <div className="flex items-center gap-2 px-2">
+                      <span className="text-xl">☀️</span>
+                      <h4 className="font-black uppercase tracking-widest text-sm opacity-60">{t.afternoon}</h4>
+                    </div>
+                    {groupedEvents.afternoon.map(renderEventCard)}
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* PHOTO ZOOM MODAL */}
-      {selectedPhoto && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-8 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={() => setSelectedPhoto(null)} />
-          
-          <div className={`relative w-full max-w-6xl h-[85vh] rounded-[2rem] overflow-hidden flex flex-col md:flex-row shadow-2xl ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+                )}
+                {groupedEvents.night.length > 0 && (
+                  <div className="space-y-4 animate-in slide-in-from-left-4 duration-500 delay-300">
+                    <div className="flex items-center gap-2 px-2">
+                      <span className="text-xl">🌙</span>
+                      <h4 className="font-black uppercase tracking-widest text-sm opacity-60">{t.night}</h4>
+                    </div>
+                    {groupedEvents.night.map(renderEventCard)}
+                  </div>
+                )}
+              </div>
+            )}
             
-            {/* Top Right Controls (Absolute) */}
-            <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-               <button 
-                 onClick={() => onEditPhoto(selectedPhoto)} 
-                 className="p-2 rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-md text-white transition-all"
-                 title="Edit Image"
-               >
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-               </button>
-               <button 
-                 onClick={() => setPhotoToDelete(selectedPhoto.id)} 
-                 className="p-2 rounded-full bg-white/20 hover:bg-rose-500 backdrop-blur-md text-white transition-all"
-                 title="Delete Photo"
-               >
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-               </button>
-               <button 
-                 onClick={() => setSelectedPhoto(null)} 
-                 className="p-2 rounded-full bg-white/20 hover:bg-white/40 backdrop-blur-md text-white transition-all"
-               >
-                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
-               </button>
-            </div>
-
-            {/* Image Section */}
-            <div className="flex-1 bg-black flex items-center justify-center relative group">
-               {selectedPhoto.type === 'video' ? (
-                 <video src={selectedPhoto.url} controls className="max-w-full max-h-full object-contain" />
+            <div className="pt-4 flex justify-center pb-20">
+               {selectedDiscoveryId ? (
+                 <button
+                   onClick={() => setShowDiscoveryModal(true)}
+                   className="flex items-center gap-2 px-8 py-4 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-700 hover:scale-105 transition-all animate-in zoom-in"
+                 >
+                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                   {t.discoverNearby}
+                 </button>
                ) : (
-                 <img 
-                   src={selectedPhoto.url} 
-                   className="max-w-full max-h-full object-contain" 
-                   alt="Zoomed"
-                   onError={(e) => {
-                     (e.target as HTMLImageElement).src = FALLBACK_IMAGE;
-                   }}
-                 />
-               )}
-            </div>
-
-            {/* Details Section */}
-            <div className={`w-full md:w-[350px] lg:w-[400px] flex flex-col border-l ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-               <div className="p-6 border-b dark:border-zinc-800">
-                  <div className="flex justify-between items-center mb-4">
-                     <div className="flex items-center gap-3">
-                        <img src={userProfile.pfp} className="w-8 h-8 rounded-full object-cover" alt="User" />
-                        <div>
-                           <p className="font-bold text-sm">{userProfile.name}</p>
-                           <p className="text-[10px] opacity-50">{new Date(selectedPhoto.date).toLocaleDateString()}</p>
-                        </div>
-                     </div>
-                     <button onClick={() => toggleFavorite(selectedPhoto.id)} className="text-zinc-400 hover:text-red-500 transition-colors">
-                        <svg className={`w-6 h-6 ${selectedPhoto.isFavorite ? 'text-red-500 fill-current' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/></svg>
-                     </button>
-                  </div>
-                  
-                  <textarea 
-                    value={selectedPhoto.caption || ''}
-                    onChange={(e) => handleUpdateCaption(e.target.value)}
-                    placeholder="Write a caption..."
-                    rows={2}
-                    className={`w-full bg-transparent text-sm resize-none outline-none font-medium ${darkMode ? 'placeholder-zinc-600' : 'placeholder-zinc-400'}`}
-                  />
-               </div>
-
-               <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
-                  <h4 className="text-xs font-black uppercase tracking-widest opacity-50">{t.commentsTitle}</h4>
-                  {!selectedPhoto.comments || selectedPhoto.comments.length === 0 ? (
-                     <p className="text-xs opacity-30 italic">No comments yet.</p>
-                  ) : (
-                     selectedPhoto.comments.map(comment => (
-                        <div key={comment.id} className="flex gap-3">
-                           <div className="w-6 h-6 rounded-full bg-indigo-500 flex items-center justify-center text-[10px] text-white font-bold shrink-0">
-                              {comment.author.charAt(0)}
-                           </div>
-                           <div>
-                              <p className="text-xs font-bold">{comment.author} <span className="text-[9px] font-normal opacity-50 ml-1">{new Date(comment.date).toLocaleDateString()}</span></p>
-                              <p className="text-sm opacity-80">{comment.text}</p>
-                           </div>
-                        </div>
-                     ))
-                  )}
-               </div>
-
-               <div className="p-4 border-t dark:border-zinc-800">
-                  <div className={`flex items-center gap-2 rounded-2xl p-2 border ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                     <input 
-                       value={commentText}
-                       onChange={(e) => setCommentText(e.target.value)}
-                       placeholder={t.addComment}
-                       className="flex-1 bg-transparent text-sm outline-none px-2"
-                       onKeyDown={(e) => e.key === 'Enter' && handleAddComment()}
-                     />
-                     <button 
-                       onClick={handleAddComment}
-                       disabled={!commentText.trim()}
-                       className="p-2 bg-indigo-600 text-white rounded-xl disabled:opacity-50"
-                     >
-                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                     </button>
-                  </div>
-               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Confirmation Modal (Reused) */}
-      {photoToDelete && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setPhotoToDelete(null)} />
-          <div className={`relative w-full max-w-sm p-6 rounded-[2rem] shadow-2xl animate-in zoom-in-95 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
-            <h3 className={`text-xl font-black mb-2 ${darkMode ? 'text-white' : 'text-zinc-900'}`}>Delete Photo?</h3>
-            <p className="text-sm text-zinc-500 font-bold mb-6">This action cannot be undone.</p>
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setPhotoToDelete(null)} 
-                className={`flex-1 py-3 rounded-xl font-black uppercase text-xs tracking-widest ${darkMode ? 'bg-zinc-800 text-white hover:bg-zinc-700' : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'}`}
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={handleDeletePhoto} 
-                className="flex-1 py-3 rounded-xl font-black uppercase text-xs tracking-widest bg-rose-500 text-white hover:bg-rose-600 shadow-lg shadow-rose-500/30"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ITINERARY VIEW */}
-      {activeTab === 'itinerary' && (
-        <div className="space-y-6 animate-in slide-in-from-right-4">
-          
-          {/* Date Selector */}
-          <div className="overflow-x-auto no-scrollbar pb-2">
-            <div className="flex gap-3">
-              {tripDays.map((date) => {
-                const d = new Date(date);
-                const dayName = d.toLocaleDateString(language, { weekday: 'short' });
-                const dayNum = d.getDate();
-                const isSelected = selectedDate === date;
-                const weather = weatherData[date];
-
-                return (
-                  <button 
-                    key={date}
-                    onClick={() => { setSelectedDate(date); setSmartRouteResult(null); }}
-                    className={`flex flex-col items-center min-w-[70px] p-3 rounded-2xl border-2 transition-all ${isSelected ? 'border-indigo-500 bg-indigo-500/10' : (darkMode ? 'border-zinc-800 bg-zinc-900' : 'border-zinc-100 bg-white')}`}
-                  >
-                    <span className={`text-[10px] font-black uppercase mb-1 ${isSelected ? 'text-indigo-500' : 'text-zinc-400'}`}>{dayName}</span>
-                    <span className={`text-xl font-black ${isSelected ? (darkMode ? 'text-white' : 'text-zinc-900') : 'text-zinc-500'}`}>{dayNum}</span>
-                    <span className="text-lg mt-1">{weather?.icon || '📅'}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Weather & Smart Route Card */}
-          <div className={`p-5 rounded-3xl border-2 flex justify-between items-center ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-             <div className="flex items-center gap-4">
-               <div className="text-3xl">{weatherData[selectedDate]?.icon || '🌤️'}</div>
-               <div>
-                 <p className="font-black text-sm">{weatherData[selectedDate]?.condition || 'Clear Sky'}</p>
-                 <p className="text-xs font-bold opacity-50">{weatherData[selectedDate]?.temp || '20°C'}</p>
-               </div>
-             </div>
-             <button 
-                onClick={handleSmartRoute}
-                disabled={isOptimizing || currentDayEvents.length < 2}
-                className="bg-black dark:bg-white text-white dark:text-black px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
-             >
-               {isOptimizing ? t.optimizing : t.smartRoute}
-             </button>
-          </div>
-
-          {/* Smart Route Result */}
-          {smartRouteResult && (
-            <div className={`p-6 rounded-3xl border-2 border-emerald-500/20 bg-emerald-500/5 animate-in fade-in`}>
-              <h4 className="font-black text-emerald-500 mb-2 flex items-center gap-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0121 18.382V7.618a1 1 0 01-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
-                {t.routeSuggestions}
-              </h4>
-              <p className="text-sm leading-relaxed opacity-80 mb-4">{smartRouteResult.text}</p>
-              <div className="flex flex-wrap gap-2">
-                {smartRouteResult.links.map((link, i) => (
-                  <a key={i} href={link.uri} target="_blank" rel="noreferrer" className="text-[10px] font-bold px-3 py-1.5 rounded-lg bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors">
-                    {link.title}
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Map Embed */}
-          {mapAllowed && mapUrl && (
-            <div className={`relative w-full rounded-[2.5rem] overflow-hidden shadow-lg border-2 transition-all duration-500 ease-in-out group ${darkMode ? 'border-zinc-800 bg-zinc-900' : 'border-zinc-100 bg-zinc-100'}`} style={{ height: isMapExpanded ? '450px' : '180px' }}>
-              <iframe
-                title="Trip Map"
-                width="100%"
-                height="100%"
-                style={{ border: 0 }}
-                loading="lazy"
-                allowFullScreen
-                src={mapUrl}
-                onLoad={recordMapLoad}
-                className="w-full h-full object-cover"
-              ></iframe>
-              
-              {/* Controls Overlay */}
-              <div className="absolute bottom-4 left-4 right-4 flex justify-between items-end z-20 pointer-events-none">
-                 {/* Left: Open External App Button */}
                  <a 
-                   href={getExternalMapsUrl(trip.location, currentDayEvents)}
+                   href={getExternalMapsUrl(trip.location, currentItinerary)}
                    target="_blank"
-                   rel="noreferrer"
-                   className="pointer-events-auto bg-white text-blue-600 border border-blue-100 px-4 py-2.5 rounded-full text-xs font-black uppercase tracking-widest shadow-xl hover:bg-blue-50 active:scale-95 transition-all flex items-center gap-2"
+                   rel="noreferrer" 
+                   className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 font-black text-xs uppercase tracking-widest hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
                  >
                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-                   Open in Maps
+                   {t.viewOnGoogleMaps}
                  </a>
-
-                 {/* Right: Expand Button */}
-                 <button 
-                   onClick={() => setIsMapExpanded(!isMapExpanded)}
-                   className="pointer-events-auto bg-black text-white dark:bg-white dark:text-black px-5 py-2.5 rounded-full text-xs font-black uppercase tracking-widest shadow-xl hover:scale-105 active:scale-95 transition-all"
-                 >
-                   {isMapExpanded ? 'Collapse' : 'Expand'}
-                 </button>
-              </div>
+               )}
             </div>
-          )}
+          </div>
+        </div>
+      )}
 
-          {/* Flights Section */}
-          <div className="space-y-3">
-            {currentFlights.map((flight, idx) => (
-              <div key={idx} className={`relative p-5 rounded-3xl border-2 overflow-hidden group ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-                {/* Background decoration */}
-                <div className="absolute top-0 right-0 p-4 opacity-5">
-                  <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>
-                </div>
-                
-                <div className="relative z-10">
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 text-indigo-500">
-                      {flight.label || t.flightDetails}
-                    </span>
-                    <div className="flex gap-2">
-                      <button onClick={() => { setFlightForm(flight); setEditingFlightIndex(idx); setShowFlightForm(true); }} className={`p-2 rounded-xl transition-colors ${darkMode ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-600'}`}>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                      </button>
-                      <button onClick={() => deleteFlight(idx)} className={`p-2 rounded-xl transition-colors ${darkMode ? 'bg-zinc-800 hover:bg-zinc-700 text-rose-400' : 'bg-zinc-100 hover:bg-zinc-200 text-rose-500'}`}>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-[9px] font-black uppercase text-zinc-400 block mb-1">{t.flightCode}</span>
-                      <span className="text-xl font-black tracking-tight">{flight.code}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-[9px] font-black uppercase text-zinc-400 block mb-1">{t.gate}</span>
-                      <span className="text-xl font-black tracking-tight">{flight.gate || '-'}</span>
-                    </div>
-                    <div className="col-span-2">
-                      <span className="text-[9px] font-black uppercase text-zinc-400 block mb-1">{t.airport}</span>
-                      <span className="font-bold text-sm block">{flight.airport}</span>
-                    </div>
-                    <div className="col-span-2 pt-2 border-t dark:border-zinc-800">
-                      <div className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                        <span className="text-xs font-bold">{flight.transport}</span>
-                      </div>
-                    </div>
-                  </div>
+      {/* Photos View */}
+      {activeTab === 'photos' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <label className={`aspect-square rounded-[2rem] border-2 border-dashed flex flex-col items-center justify-center cursor-pointer transition-colors ${darkMode ? 'border-zinc-800 hover:bg-zinc-900' : 'border-zinc-200 hover:bg-zinc-50'}`}>
+              <svg className="w-8 h-8 opacity-50 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+              <span className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.importMedia}</span>
+              <input type="file" className="hidden" accept="image/*" onChange={handlePhotoUpload} />
+            </label>
+            {trip.photos.map(photo => (
+              <div key={photo.id} onClick={() => onEditPhoto(photo)} className="group relative aspect-square rounded-[2rem] overflow-hidden cursor-pointer shadow-sm hover:shadow-xl transition-all">
+                <img src={photo.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" alt={photo.caption} />
+                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <span className="bg-white/20 backdrop-blur-md text-white px-3 py-1 rounded-full text-xs font-bold">Edit</span>
                 </div>
               </div>
             ))}
-            
-            <button 
-              onClick={() => { setFlightForm({ code: '', gate: '', airport: '', transport: '' }); setEditingFlightIndex(null); setShowFlightForm(true); }}
-              className={`w-full py-3 rounded-2xl border-2 border-dashed text-xs font-black uppercase tracking-widest transition-all ${darkMode ? 'border-zinc-800 text-zinc-500 hover:border-indigo-500 hover:text-indigo-500' : 'border-zinc-200 text-zinc-400 hover:border-indigo-400 hover:text-indigo-600'}`}
-            >
-              + {t.flightDetails}
-            </button>
           </div>
-
-          {/* Events List */}
-          <div className="space-y-4">
-            {/* Auto Research Button */}
-            {currentDayEvents.length > 0 && (
-              <button 
-                onClick={handleResearchAll}
-                disabled={isResearchingAll}
-                className={`w-full py-3 rounded-2xl font-black uppercase tracking-widest text-xs mb-2 transition-all flex items-center justify-center gap-2 ${darkMode ? 'bg-indigo-900/30 text-indigo-400 hover:bg-indigo-900/50' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'} disabled:opacity-50`}
-              >
-                {isResearchingAll ? (
-                   <><span className="animate-spin">⏳</span> Researching Day...</>
-                ) : (
-                   <>⚡ Auto-Research Day Logistics</>
-                )}
-              </button>
-            )}
-
-            {currentDayEvents.length === 0 ? (
-              <div className="text-center py-12 opacity-40">
-                <p className="font-bold">No plans yet.</p>
-              </div>
-            ) : (
-              currentDayEvents.map((item, index) => (
-                <div key={item.id} className={`group relative p-5 rounded-3xl border-2 transition-all ${darkMode ? 'bg-zinc-900 border-zinc-800 hover:border-zinc-700' : 'bg-white border-zinc-100 hover:border-zinc-200 hover:shadow-lg'}`}>
-                  <div className="flex items-start gap-4">
-                    <div className="flex flex-col items-center gap-1 min-w-[50px]">
-                      {item.time ? (
-                        <>
-                          <span className="text-xs font-black opacity-50">{item.time}</span>
-                          {item.endTime && <span className="text-[9px] font-black opacity-30">{item.endTime}</span>}
-                        </>
-                      ) : (
-                        <span className="text-xs font-black opacity-50 uppercase">{item.period || 'ALL'}</span>
-                      )}
-                      
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl mt-1 ${
-                        item.type === 'eating' ? 'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400' : 
-                        item.type === 'transport' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' : 
-                        item.type === 'shopping' ? 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-400' : 
-                        'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'
-                      }`}>
-                        {item.type === 'eating' ? '🍱' : item.type === 'transport' ? '🚆' : item.type === 'shopping' ? '🛍️' : '🏛️'}
-                      </div>
-                    </div>
-                    
-                    <div className="flex-1 space-y-1">
-                      <h4 className="font-black text-lg leading-tight">{item.title}</h4>
-                      <p className="text-sm opacity-70 leading-relaxed whitespace-pre-wrap">{item.description}</p>
-                      
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {item.estimatedExpense > 0 && (
-                          <span className="text-[10px] font-black px-2 py-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
-                            {item.currency}{item.estimatedExpense}
-                          </span>
-                        )}
-                        {item.transportMethod && (
-                          <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 flex items-center gap-1">
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                            {item.transportMethod}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* AI Actions */}
-                      <div className="flex flex-wrap gap-2 mt-3">
-                        {item.guideInfo ? (
-                          <div className="w-full mt-2 p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-900/50 space-y-3">
-                            <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
-                              <span className="text-lg">✨</span>
-                              <span className="text-xs font-black uppercase tracking-widest">{t.aiGuide}</span>
-                            </div>
-                            <p className="text-sm italic opacity-90">"{item.guideInfo.story}"</p>
-                            <div className="grid grid-cols-2 gap-2">
-                              {item.guideInfo.mustEat?.length > 0 && (
-                                <div className="bg-white dark:bg-zinc-800 p-2 rounded-xl">
-                                  <span className="text-[9px] font-black uppercase text-orange-500 block mb-1">{t.mustEat}</span>
-                                  <span className="text-xs font-bold block">{item.guideInfo.mustEat[0]}</span>
+        </div>
+      )}
+      
+      {/* Info View */}
+      {activeTab === 'info' && (
+        <div className="space-y-6">
+           <div className={`p-6 rounded-[2.5rem] border ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
+              <h3 className="text-xl font-black mb-4">Trip Details</h3>
+              <p className="opacity-70 leading-relaxed">{trip.description}</p>
+              
+              {/* RESTORED & EDITABLE: Simple Flight Details (Departure/Return) */}
+              {(!trip.flights || Object.keys(trip.flights).length === 0) && (
+                <div className="mt-8 space-y-6">
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                           <h4 className="font-bold uppercase text-xs tracking-widest opacity-50">{t.departure}</h4>
+                           {!trip.departureFlight && (
+                             <button onClick={() => handleOpenFlightModal('departure')} className="text-[10px] font-black text-indigo-500 hover:text-indigo-600 uppercase tracking-widest">+ Add Departure</button>
+                           )}
+                        </div>
+                        {trip.departureFlight && (
+                            <div className={`group relative p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                                <div>
+                                    <div className="font-black">{trip.departureFlight.code}</div>
+                                    <div className="text-xs opacity-60">{trip.departureFlight.airport}</div>
                                 </div>
-                              )}
-                              {item.guideInfo.mustOrder?.length > 0 && (
-                                <div className="bg-white dark:bg-zinc-800 p-2 rounded-xl">
-                                  <span className="text-[9px] font-black uppercase text-blue-500 block mb-1">{t.mustOrder}</span>
-                                  <span className="text-xs font-bold block">{item.guideInfo.mustOrder[0]}</span>
+                                <div className="text-right">
+                                    <div className="text-xs font-bold">{trip.departureFlight.gate ? `Gate ${trip.departureFlight.gate}` : ''}</div>
+                                    <div className="text-[10px] opacity-60">{trip.departureFlight.transport}</div>
                                 </div>
-                              )}
+                                <div className="absolute top-2 right-2 flex gap-1">
+                                   <button onClick={() => handleOpenFlightModal('departure')} className="p-1.5 bg-white text-indigo-600 rounded-lg shadow hover:bg-indigo-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                   <button onClick={() => handleDeleteFlight('departure')} className="p-1.5 bg-white text-rose-500 rounded-lg shadow hover:bg-rose-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                </div>
                             </div>
-                          </div>
-                        ) : (
-                          <button 
-                            onClick={() => handleAiGuide(item)}
-                            disabled={loadingGuideId === item.id}
-                            className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors disabled:opacity-50"
-                          >
-                            {loadingGuideId === item.id ? '⏳ Guide...' : '✨ Guide'}
-                          </button>
                         )}
+                    </div>
 
-                        <button
-                          onClick={() => handleResearchLogistics(item, index > 0 ? currentDayEvents[index - 1] : null)}
-                          disabled={researchingEventId === item.id}
-                          className="px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors disabled:opacity-50"
-                        >
-                          {researchingEventId === item.id ? '⏳ Researching...' : '🔍 Research Logistics'}
-                        </button>
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                           <h4 className="font-bold uppercase text-xs tracking-widest opacity-50">{t.return}</h4>
+                           {!trip.returnFlight && (
+                             <button onClick={() => handleOpenFlightModal('return')} className="text-[10px] font-black text-indigo-500 hover:text-indigo-600 uppercase tracking-widest">+ Add Return</button>
+                           )}
+                        </div>
+                        {trip.returnFlight && (
+                            <div className={`group relative p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                                <div>
+                                    <div className="font-black">{trip.returnFlight.code}</div>
+                                    <div className="text-xs opacity-60">{trip.returnFlight.airport}</div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-xs font-bold">{trip.returnFlight.gate ? `Gate ${trip.returnFlight.gate}` : ''}</div>
+                                    <div className="text-[10px] opacity-60">{trip.returnFlight.transport}</div>
+                                </div>
+                                <div className="absolute top-2 right-2 flex gap-1">
+                                   <button onClick={() => handleOpenFlightModal('return')} className="p-1.5 bg-white text-indigo-600 rounded-lg shadow hover:bg-indigo-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                   <button onClick={() => handleDeleteFlight('return')} className="p-1.5 bg-white text-rose-500 rounded-lg shadow hover:bg-rose-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+              )}
+
+              {/* Complex Flight Itinerary (Multi-leg) - Now Editable */}
+              {trip.flights && Object.keys(trip.flights).length > 0 && (
+                <div className="mt-8 space-y-4">
+                  <h4 className="font-bold uppercase text-xs tracking-widest opacity-50">{t.flightDetails}</h4>
+                  {Object.entries(trip.flights).map(([date, flights]) => (
+                     <div key={date} className="space-y-2">
+                        <div className="text-xs font-black opacity-60">{date}</div>
+                        {(flights as FlightInfo[]).map((f, i) => (
+                           <div key={i} className={`group relative p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                              <div>
+                                 <div className="font-black">{f.code}</div>
+                                 <div className="text-xs opacity-60">{f.airport}</div>
+                              </div>
+                              <div className="text-right">
+                                 <div className="text-xs font-bold">{f.gate ? `Gate ${f.gate}` : ''}</div>
+                                 <div className="text-[10px] opacity-60">{f.transport}</div>
+                              </div>
+                              <div className="absolute top-2 right-2 flex gap-1">
+                                 <button onClick={() => handleOpenFlightModal('complex', date, i)} className="p-1.5 bg-white text-indigo-600 rounded-lg shadow hover:bg-indigo-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                 <button onClick={() => handleDeleteFlight('complex', date, i)} className="p-1.5 bg-white text-rose-500 rounded-lg shadow hover:bg-rose-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                              </div>
+                           </div>
+                        ))}
+                     </div>
+                  ))}
+                </div>
+              )}
+           </div>
+        </div>
+      )}
+
+      {/* Discovery Modal */}
+      {showDiscoveryModal && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDiscoveryModal(false)} />
+          <div className={`relative w-full max-w-lg p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 sm:zoom-in-95 max-h-[90vh] overflow-y-auto ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+             <h3 className="text-2xl font-black mb-6">{t.discoverNearby}</h3>
+             
+             <div className="flex gap-2 mb-6">
+                {(['eating', 'sightseeing', 'shopping'] as const).map(cat => (
+                  <button 
+                    key={cat} 
+                    onClick={() => handleDiscoverNearby(cat)}
+                    disabled={isDiscovering}
+                    className={`flex-1 py-3 rounded-2xl border-2 font-black text-xs uppercase tracking-widest transition-all ${isDiscovering ? 'opacity-50' : 'hover:scale-105 active:scale-95'} ${darkMode ? 'border-zinc-700 hover:bg-zinc-800' : 'border-zinc-200 hover:bg-zinc-50'}`}
+                  >
+                    {cat === 'eating' && '🍱 Food'}
+                    {cat === 'sightseeing' && '🏛️ Sights'}
+                    {cat === 'shopping' && '🛍️ Shop'}
+                  </button>
+                ))}
+             </div>
+
+             {isDiscovering ? (
+               <div className="py-12 flex flex-col items-center justify-center text-indigo-500">
+                 <div className="w-10 h-10 border-4 border-current border-t-transparent rounded-full animate-spin mb-4" />
+                 <p className="font-black text-xs uppercase tracking-widest">{t.searching}</p>
+               </div>
+             ) : (
+               <div className="space-y-3">
+                 {discoveryResults.map((place, i) => (
+                   <div key={i} className={`p-4 rounded-2xl border flex justify-between items-center ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                      <div>
+                        <div className="font-bold">{place.title}</div>
+                        <div className="text-xs opacity-60 max-w-[200px] truncate">{place.description}</div>
                       </div>
-                    </div>
+                      <button 
+                        onClick={() => handleAddDiscovery(place)}
+                        className="p-2 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-colors"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
+                      </button>
+                   </div>
+                 ))}
+                 {discoveryResults.length === 0 && (
+                   <div className="text-center py-8 opacity-40 font-bold text-sm">Select a category to start exploring.</div>
+                 )}
+               </div>
+             )}
+          </div>
+        </div>
+      )}
 
-                    <div className="flex flex-col gap-2">
-                      <button onClick={() => { setEventForm(item); setEditingEventId(item.id); setTimeMode(item.time ? 'exact' : 'period'); setShowEventForm(true); }} className={`p-2 rounded-xl transition-colors ${darkMode ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-600'}`}>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
-                      </button>
-                      <button onClick={() => deleteEvent(item.id)} className={`p-2 rounded-xl transition-colors ${darkMode ? 'bg-zinc-800 hover:bg-zinc-700 text-rose-400' : 'bg-zinc-100 hover:bg-zinc-200 text-rose-500'}`}>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                      </button>
-                    </div>
+      {/* Flight Modal */}
+      {showFlightModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowFlightModal(false)} />
+          <div className={`relative w-full max-w-sm p-6 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+             <h3 className="text-2xl font-black mb-6">{editingFlightType === 'departure' ? t.departure : (editingFlightType === 'return' ? t.return : t.flightDetails)}</h3>
+             <div className="space-y-4">
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.flightCode}</label>
+                   <input 
+                     value={flightForm.code} 
+                     onChange={e => setFlightForm({...flightForm, code: e.target.value})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
+                   />
+                </div>
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.airport}</label>
+                   <input 
+                     value={flightForm.airport} 
+                     onChange={e => setFlightForm({...flightForm, airport: e.target.value})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
+                   />
+                </div>
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.gate}</label>
+                   <input 
+                     value={flightForm.gate} 
+                     onChange={e => setFlightForm({...flightForm, gate: e.target.value})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
+                   />
+                </div>
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.transport}</label>
+                   <input 
+                     value={flightForm.transport} 
+                     onChange={e => setFlightForm({...flightForm, transport: e.target.value})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
+                   />
+                </div>
+                <div className="pt-4 flex gap-3">
+                   <button onClick={() => setShowFlightModal(false)} className="flex-1 py-3 font-black uppercase text-xs rounded-xl bg-zinc-100 dark:bg-zinc-800">{t.cancel}</button>
+                   <button onClick={handleSaveFlight} className="flex-1 py-3 font-black uppercase text-xs rounded-xl bg-indigo-600 text-white shadow-lg">{t.save}</button>
+                </div>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Event Modal */}
+      {showEventModal && (
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowEventModal(false)} />
+          <div className={`relative w-full max-w-lg p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 sm:zoom-in-95 max-h-[90vh] overflow-y-auto ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+             <div className="flex justify-between items-center mb-6">
+               <h3 className="text-2xl font-black">{editingEventId ? t.updateEvent : t.addEvent}</h3>
+               <button onClick={openAiLogistics} disabled={aiLoading || !eventForm.title} className="text-xs font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-600 flex items-center gap-1 disabled:opacity-50">
+                 {aiLoading ? <span className="animate-pulse">Thinking...</span> : '✨ Auto-Fill Logistics'}
+               </button>
+             </div>
+
+             <div className="space-y-4">
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.eventName}</label>
+                   <input 
+                     placeholder="e.g. Visit Louvre Museum"
+                     value={eventForm.title}
+                     onChange={e => setEventForm({...eventForm, title: e.target.value})}
+                     className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                   />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Period Selector */}
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.period || 'Period'}</label>
+                     <select 
+                       value={eventForm.period}
+                       onChange={e => setEventForm({...eventForm, period: e.target.value as any})}
+                       className={`w-full p-4 rounded-2xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
+                     >
+                       <option value="morning">{t.morning}</option>
+                       <option value="afternoon">{t.afternoon}</option>
+                       <option value="night">{t.night}</option>
+                     </select>
+                  </div>
+
+                  {/* Exact Time (Optional) */}
+                  <div className="space-y-2 relative">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.exactTime} (Optional)</label>
+                     <div className="relative">
+                       <input 
+                         type="time"
+                         value={eventForm.time}
+                         onChange={e => handleTimeChange(e.target.value)}
+                         className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
+                       />
+                       {eventForm.time && (
+                         <button 
+                           onClick={() => setEventForm({...eventForm, time: ''})}
+                           className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-rose-500 transition-colors"
+                           title="Clear specific time"
+                         >
+                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                         </button>
+                       )}
+                     </div>
                   </div>
                 </div>
-              ))
-            )}
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <button onClick={() => { setEditingEventId(null); setEventForm({ type: 'sightseeing', estimatedExpense: 0, actualExpense: 0, currency: trip.defaultCurrency }); setTimeMode('exact'); setShowEventForm(true); }} className="w-full py-4 rounded-3xl border-2 border-dashed border-zinc-300 dark:border-zinc-700 text-zinc-400 font-black uppercase tracking-widest hover:border-indigo-500 hover:text-indigo-500 transition-all">
-              {t.addEvent}
-            </button>
-            <button onClick={() => setShowDiscovery(true)} className="w-full py-4 rounded-3xl border-2 border-dashed border-indigo-300 dark:border-indigo-800 text-indigo-500 font-black uppercase tracking-widest hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-all">
-              {t.discoverNearby}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Flight Form Modal */}
-      {showFlightForm && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowFlightForm(false)} />
-          <div className={`relative w-full max-w-sm p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
-            <h3 className="text-xl font-black mb-6">{editingFlightIndex !== null ? 'Update Flight' : 'Add Flight'}</h3>
-            <form onSubmit={handleFlightSubmit} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.flightCode}</label>
-                <input 
-                  required
-                  value={flightForm.code} 
-                  onChange={e => setFlightForm({...flightForm, code: e.target.value})}
-                  placeholder="e.g. JL820"
-                  className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.gate}</label>
-                <input 
-                  value={flightForm.gate} 
-                  onChange={e => setFlightForm({...flightForm, gate: e.target.value})}
-                  placeholder="e.g. 62"
-                  className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.airport}</label>
-                <input 
-                  value={flightForm.airport} 
-                  onChange={e => setFlightForm({...flightForm, airport: e.target.value})}
-                  placeholder="e.g. Narita Intl"
-                  className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.transportPlan}</label>
-                <input 
-                  value={flightForm.transport} 
-                  onChange={e => setFlightForm({...flightForm, transport: e.target.value})}
-                  placeholder="e.g. Express Train"
-                  className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                />
-              </div>
-              <button type="submit" className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl mt-2">
-                {t.confirmSelection}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Event Form Modal */}
-      {showEventForm && (
-        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
-           {/* Backdrop */}
-           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowEventForm(false)} />
-           
-           {/* Modal Content */}
-           <form 
-             onSubmit={handleEventSubmit}
-             className={`relative w-full max-w-md max-h-[90vh] flex flex-col rounded-t-[2.5rem] sm:rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-full sm:slide-in-from-bottom-10 duration-300 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}
-           >
-              {/* Header (Title) */}
-              <div className="px-8 pt-8 pb-4 flex-shrink-0">
-                 <h3 className="text-2xl font-black">{editingEventId ? t.updateEvent : t.addEvent}</h3>
-              </div>
-
-              {/* Scrollable Body */}
-              <div className="flex-1 overflow-y-auto px-8 py-2 space-y-6 custom-scrollbar pb-32">
-                 
-                 {/* Time Setting Toggle */}
-                 <div className="space-y-3">
-                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Time Setting</label>
-                   <div className={`flex p-1 rounded-2xl ${darkMode ? 'bg-zinc-950' : 'bg-zinc-100'}`}>
-                     <button 
-                       type="button"
-                       onClick={() => setTimeMode('exact')}
-                       className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${timeMode === 'exact' ? (darkMode ? 'bg-zinc-800 text-white shadow-lg' : 'bg-white text-black shadow-lg') : 'text-zinc-500'}`}
-                     >
-                       ⏱️ {t.exactTime}
-                     </button>
-                     <button 
-                       type="button"
-                       onClick={() => setTimeMode('period')}
-                       className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${timeMode === 'period' ? (darkMode ? 'bg-zinc-800 text-white shadow-lg' : 'bg-white text-black shadow-lg') : 'text-zinc-500'}`}
-                     >
-                       🕒 {t.period}
-                     </button>
-                   </div>
-                 </div>
-
-                 {/* Time Inputs */}
-                 {timeMode === 'exact' ? (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.startTime}</label>
-                        <input 
-                          type="time" 
-                          value={eventForm.time || ''} 
-                          onChange={e => setEventForm({...eventForm, time: e.target.value})}
-                          className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.endTime}</label>
-                        <input 
-                          type="time" 
-                          value={eventForm.endTime || ''} 
-                          onChange={e => setEventForm({...eventForm, endTime: e.target.value})}
-                          className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                        />
-                      </div>
-                    </div>
-                 ) : (
-                    <div className="flex gap-2">
-                        {['morning', 'afternoon', 'night'].map((p) => (
-                            <button
-                                key={p}
-                                type="button"
-                                onClick={() => setEventForm({...eventForm, period: p as any})}
-                                className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest border-2 transition-all ${eventForm.period === p ? 'border-indigo-500 text-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : (darkMode ? 'border-zinc-800 text-zinc-500 hover:border-zinc-700 bg-zinc-950' : 'border-zinc-200 text-zinc-400 hover:border-zinc-300 bg-zinc-50')}`}
-                            >
-                                {p === 'morning' ? t.morning : p === 'afternoon' ? t.afternoon : t.night}
-                            </button>
-                        ))}
-                    </div>
-                 )}
-
-                 {/* Event Name */}
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.eventName}</label>
-                    <input 
-                      required
-                      value={eventForm.title || ''}
-                      onChange={e => setEventForm({...eventForm, title: e.target.value})}
-                      placeholder="e.g. Visit Tokyo Tower"
-                      className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                    />
-                 </div>
-
-                 {/* Category */}
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.category}</label>
-                    <select 
-                        value={eventForm.type} 
-                        onChange={e => setEventForm({...eventForm, type: e.target.value as any})}
-                        className={`w-full p-4 rounded-2xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                    >
-                        <option value="sightseeing">{t.sightseeing}</option>
-                        <option value="eating">{t.eating}</option>
-                        <option value="shopping">{t.shopping}</option>
-                        <option value="transport">{t.transport}</option>
-                        <option value="other">{t.other}</option>
-                    </select>
-                 </div>
-
-                 {/* Description */}
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.briefDescription}</label>
-                    <textarea 
-                      rows={3}
-                      value={eventForm.description || ''}
-                      onChange={e => setEventForm({...eventForm, description: e.target.value})}
-                      className={`w-full p-4 rounded-2xl font-bold outline-none border-2 resize-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                    />
-                 </div>
-
-                 {/* How to get there */}
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.howToGetThere}</label>
-                    <input 
-                      value={eventForm.transportMethod || ''}
-                      onChange={e => setEventForm({...eventForm, transportMethod: e.target.value})}
-                      placeholder="e.g. Walk 5 mins / Bus 205"
-                      className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                    />
-                 </div>
-
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.category}</label>
+                   <select 
+                     value={eventForm.type}
+                     onChange={e => setEventForm({...eventForm, type: e.target.value as any})}
+                     className={`w-full p-4 rounded-2xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                   >
+                     <option value="sightseeing">🏛️ Sightseeing</option>
+                     <option value="eating">🍱 Eating</option>
+                     <option value="shopping">🛍️ Shopping</option>
+                     <option value="transport">🚗 Transport</option>
+                     <option value="other">✨ Other</option>
+                   </select>
+                </div>
+                
                  {/* Estimated Cost */}
                  <div className="space-y-2">
                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.estimated}</label>
                     <div className="flex gap-4">
                        <input 
                          type="number"
-                         value={eventForm.estimatedExpense}
+                         placeholder="0"
+                         value={eventForm.estimatedExpense === 0 ? '' : eventForm.estimatedExpense}
                          onChange={e => setEventForm({...eventForm, estimatedExpense: parseFloat(e.target.value) || 0})}
                          className={`flex-1 p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
                        />
@@ -1415,76 +914,27 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                        </div>
                     </div>
                  </div>
-              </div>
 
-              {/* Footer Button (Fixed) */}
-              <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-white via-white to-transparent dark:from-zinc-900 dark:via-zinc-900 z-10 rounded-b-[2.5rem]">
-                 <button 
-                   type="submit"
-                   className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl active:scale-95 transition-transform"
-                 >
-                   {t.confirmSelection}
-                 </button>
-              </div>
-           </form>
-        </div>
-      )}
+                 <div className="space-y-2">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.briefDescription}</label>
+                   <textarea 
+                     rows={3}
+                     placeholder="Notes about this event..."
+                     value={eventForm.description}
+                     onChange={e => setEventForm({...eventForm, description: e.target.value})}
+                     className={`w-full p-4 rounded-2xl font-medium outline-none border-2 resize-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                   />
+                 </div>
+             </div>
 
-      {/* Discovery Modal */}
-      {showDiscovery && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 animate-in fade-in duration-200">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDiscovery(false)} />
-          <div className={`relative w-full max-w-sm p-6 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
-            <h3 className="text-xl font-black mb-4">{t.discoverNearby}</h3>
-            {/* Search Input */}
-            <div className="flex gap-2 mb-4">
-              <input 
-                autoFocus
-                value={discoveryQuery}
-                onChange={(e) => setDiscoveryQuery(e.target.value)}
-                placeholder={t.searchPlaceholder || "Search..."}
-                className={`flex-1 p-3 rounded-xl border-2 font-bold outline-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                onKeyDown={(e) => e.key === 'Enter' && handleDiscover(discoveryQuery)}
-              />
-              <button 
-                onClick={() => handleDiscover(discoveryQuery)}
-                disabled={isDiscovering}
-                className="p-3 bg-indigo-600 text-white rounded-xl shadow-lg disabled:opacity-50"
-              >
-                {isDiscovering ? <span className="animate-spin">⏳</span> : '🔍'}
-              </button>
-            </div>
-            
-            {/* Categories */}
-            <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">
-              {[t.findFood, t.findSights, t.findShops].map((cat, i) => (
-                 <button 
-                   key={i} 
-                   onClick={() => { setDiscoveryQuery(cat); handleDiscover(cat); }}
-                   className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-widest whitespace-nowrap border ${darkMode ? 'border-zinc-700 hover:bg-zinc-800' : 'border-zinc-200 hover:bg-zinc-100'}`}
-                 >
-                   {cat}
-                 </button>
-              ))}
-            </div>
-
-            {/* Results */}
-            <div className="max-h-60 overflow-y-auto space-y-2 custom-scrollbar">
-              {discoveryResults.map((place, i) => (
-                <div key={i} className={`p-3 rounded-xl border flex justify-between items-center ${darkMode ? 'border-zinc-800' : 'border-zinc-100'}`}>
-                  <div className="flex-1 mr-2">
-                    <p className="font-bold text-sm">{place.title}</p>
-                    <p className="text-[10px] opacity-60 line-clamp-1">{place.description}</p>
-                  </div>
-                  <button onClick={() => handleAddDiscoveryItem(place)} className="bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 p-2 rounded-lg">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4"/></svg>
-                  </button>
-                </div>
-              ))}
-              {discoveryResults.length === 0 && !isDiscovering && (
-                <p className="text-center text-xs opacity-40 py-4">No results found.</p>
-              )}
-            </div>
+             <div className="mt-8 flex gap-3">
+               <button onClick={() => setShowEventModal(false)} className={`flex-1 py-4 rounded-2xl font-black uppercase text-xs tracking-widest ${darkMode ? 'bg-zinc-800' : 'bg-zinc-100'}`}>
+                 {t.cancel}
+               </button>
+               <button onClick={handleSaveEvent} className="flex-[2] py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">
+                 {t.save}
+               </button>
+             </div>
           </div>
         </div>
       )}
