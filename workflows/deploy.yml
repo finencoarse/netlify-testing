@@ -31,9 +31,8 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # If you have an API Key secret in GitHub, uncomment the next line
-          # API_KEY: ${{ secrets.API_KEY }}
-          VITE_BASE_PATH: /netlify-testing/
+          # This ensures the build knows it's running in a CI environment
+          CI: true
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
