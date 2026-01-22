@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, TourGuideData } from '../types';
+import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, TourGuideData, Hotel } from '../types';
 import { translations } from '../translations';
 import { GeminiService } from '../services/geminiService';
 import { GoogleService } from '../services/driveService';
@@ -41,6 +41,10 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
   const [discoveryResults, setDiscoveryResults] = useState<any[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
+
+  // Hotel Recommendation State
+  const [hotelPreferences, setHotelPreferences] = useState('');
+  const [isSearchingHotels, setIsSearchingHotels] = useState(false);
 
   // Event Form State
   const [eventForm, setEventForm] = useState<Partial<ItineraryItem>>({
@@ -269,6 +273,25 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       }
     });
     setShowDiscoveryModal(false);
+  };
+
+  const handleFindHotels = async () => {
+    setIsSearchingHotels(true);
+    try {
+      const allItems = Object.values(trip.itinerary).flat();
+      const hotels = await GeminiService.recommendHotels(
+        trip.location, 
+        allItems, 
+        hotelPreferences, 
+        language
+      );
+      onUpdate({ ...trip, hotels });
+    } catch (e) {
+      console.error("Hotel search failed", e);
+      alert("Could not find hotels. Please try again.");
+    } finally {
+      setIsSearchingHotels(false);
+    }
   };
 
   // --- Flight Handlers ---
@@ -583,7 +606,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
               </div>
             )}
             
-            <div className="pt-4 flex justify-center pb-20">
+            <div className="pt-4 flex justify-center">
                {selectedDiscoveryId ? (
                  <button
                    onClick={() => setShowDiscoveryModal(true)}
@@ -604,6 +627,103 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                  </a>
                )}
             </div>
+          </div>
+
+          {/* Hotel Recommendation Section */}
+          <div className="pt-12 border-t border-zinc-100 dark:border-zinc-800">
+             <div className="flex flex-col gap-4">
+               <div className="flex items-center justify-between">
+                 <div>
+                   <h3 className="text-2xl font-black">{t.hotels}</h3>
+                   <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{t.recommendedHotels}</p>
+                 </div>
+                 {trip.hotels && trip.hotels.length > 0 && (
+                   <span className="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
+                     {trip.hotels.length} Found
+                   </span>
+                 )}
+               </div>
+
+               <div className={`p-6 rounded-[2.5rem] border-2 space-y-4 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
+                  <div className="flex flex-col md:flex-row gap-4 items-stretch">
+                     <div className="flex-1">
+                        <label className="text-[10px] font-black uppercase tracking-widest opacity-50 ml-1 mb-2 block">{t.hotelPreferences}</label>
+                        <div className="relative">
+                          <input 
+                            value={hotelPreferences}
+                            onChange={(e) => setHotelPreferences(e.target.value)}
+                            placeholder={t.hotelPlaceholder}
+                            className={`w-full p-4 rounded-2xl font-bold outline-none border-2 transition-all ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
+                          />
+                          <div className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400">
+                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                          </div>
+                        </div>
+                     </div>
+                     <button 
+                       onClick={handleFindHotels}
+                       disabled={isSearchingHotels}
+                       className="self-end px-8 py-4 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-700 hover:scale-105 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
+                     >
+                       {isSearchingHotels ? (
+                         <>
+                           <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                           {t.analyzingPlan}
+                         </>
+                       ) : (
+                         <>
+                           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                           {t.findHotels}
+                         </>
+                       )}
+                     </button>
+                  </div>
+
+                  {trip.hotels && trip.hotels.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 animate-in fade-in slide-in-from-bottom-4">
+                       {trip.hotels.map((hotel) => (
+                         <div key={hotel.id} className={`p-5 rounded-2xl border flex flex-col gap-3 group relative overflow-hidden ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                            <div className="flex justify-between items-start">
+                               <div>
+                                  <h4 className="font-black text-lg leading-tight">{hotel.name}</h4>
+                                  <div className="flex items-center gap-1 mt-1">
+                                     <span className="text-yellow-500 text-xs">★</span>
+                                     <span className="text-xs font-bold">{hotel.rating}</span>
+                                     <span className="text-[10px] opacity-50 px-2">•</span>
+                                     <span className="text-xs opacity-60 font-bold">{hotel.price}</span>
+                                  </div>
+                               </div>
+                               <div className="p-2 bg-white dark:bg-zinc-800 rounded-xl shadow-sm">
+                                  <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                               </div>
+                            </div>
+                            
+                            <p className="text-sm opacity-70 leading-relaxed italic border-l-2 border-indigo-500 pl-3">
+                               "{hotel.reason}"
+                            </p>
+
+                            <div className="flex flex-wrap gap-2 mt-auto pt-2">
+                               {hotel.amenities.map(tag => (
+                                 <span key={tag} className="px-2 py-1 rounded-md bg-zinc-200 dark:bg-zinc-800 text-[10px] font-bold uppercase tracking-wider opacity-70">
+                                   {tag}
+                                 </span>
+                               ))}
+                            </div>
+
+                            <a 
+                              href={hotel.bookingUrl || `https://www.google.com/travel/hotels?q=${encodeURIComponent(hotel.name + ' ' + trip.location)}`}
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="mt-3 w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-black font-black text-xs uppercase tracking-widest text-center hover:scale-[1.02] active:scale-[0.98] transition-all"
+                            >
+                              {t.bookNow}
+                            </a>
+                         </div>
+                       ))}
+                    </div>
+                  )}
+               </div>
+             </div>
           </div>
         </div>
       )}
@@ -647,18 +767,18 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                            )}
                         </div>
                         {trip.departureFlight && (
-                            <div className={`group relative p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                                <div>
-                                    <div className="font-black">{trip.departureFlight.code}</div>
-                                    <div className="text-xs opacity-60">{trip.departureFlight.airport}</div>
+                            <div className={`group p-3 rounded-xl border flex items-center gap-3 ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-black truncate">{trip.departureFlight.code}</div>
+                                    <div className="text-xs opacity-60 truncate">{trip.departureFlight.airport}</div>
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-xs font-bold">{trip.departureFlight.gate ? `Gate ${trip.departureFlight.gate}` : ''}</div>
-                                    <div className="text-[10px] opacity-60">{trip.departureFlight.transport}</div>
+                                <div className="text-right flex-1 min-w-0">
+                                    <div className="text-xs font-bold truncate">{trip.departureFlight.gate ? `Gate ${trip.departureFlight.gate}` : ''}</div>
+                                    <div className="text-[10px] opacity-60 truncate">{trip.departureFlight.transport}</div>
                                 </div>
-                                <div className="absolute top-2 right-2 flex gap-1">
-                                   <button onClick={() => handleOpenFlightModal('departure')} className="p-1.5 bg-white text-indigo-600 rounded-lg shadow hover:bg-indigo-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
-                                   <button onClick={() => handleDeleteFlight('departure')} className="p-1.5 bg-white text-rose-500 rounded-lg shadow hover:bg-rose-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                <div className="flex gap-1 shrink-0 ml-2">
+                                   <button onClick={() => handleOpenFlightModal('departure')} className="p-1.5 bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 rounded-lg shadow hover:bg-indigo-50 dark:hover:bg-zinc-700"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                   <button onClick={() => handleDeleteFlight('departure')} className="p-1.5 bg-white dark:bg-zinc-800 text-rose-500 rounded-lg shadow hover:bg-rose-50 dark:hover:bg-zinc-700"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                                 </div>
                             </div>
                         )}
@@ -672,18 +792,18 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                            )}
                         </div>
                         {trip.returnFlight && (
-                            <div className={`group relative p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                                <div>
-                                    <div className="font-black">{trip.returnFlight.code}</div>
-                                    <div className="text-xs opacity-60">{trip.returnFlight.airport}</div>
+                            <div className={`group p-3 rounded-xl border flex items-center gap-3 ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                                <div className="flex-1 min-w-0">
+                                    <div className="font-black truncate">{trip.returnFlight.code}</div>
+                                    <div className="text-xs opacity-60 truncate">{trip.returnFlight.airport}</div>
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-xs font-bold">{trip.returnFlight.gate ? `Gate ${trip.returnFlight.gate}` : ''}</div>
-                                    <div className="text-[10px] opacity-60">{trip.returnFlight.transport}</div>
+                                <div className="text-right flex-1 min-w-0">
+                                    <div className="text-xs font-bold truncate">{trip.returnFlight.gate ? `Gate ${trip.returnFlight.gate}` : ''}</div>
+                                    <div className="text-[10px] opacity-60 truncate">{trip.returnFlight.transport}</div>
                                 </div>
-                                <div className="absolute top-2 right-2 flex gap-1">
-                                   <button onClick={() => handleOpenFlightModal('return')} className="p-1.5 bg-white text-indigo-600 rounded-lg shadow hover:bg-indigo-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
-                                   <button onClick={() => handleDeleteFlight('return')} className="p-1.5 bg-white text-rose-500 rounded-lg shadow hover:bg-rose-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                                <div className="flex gap-1 shrink-0 ml-2">
+                                   <button onClick={() => handleOpenFlightModal('return')} className="p-1.5 bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 rounded-lg shadow hover:bg-indigo-50 dark:hover:bg-zinc-700"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                   <button onClick={() => handleDeleteFlight('return')} className="p-1.5 bg-white dark:bg-zinc-800 text-rose-500 rounded-lg shadow hover:bg-rose-50 dark:hover:bg-zinc-700"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                                 </div>
                             </div>
                         )}
@@ -699,18 +819,18 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                      <div key={date} className="space-y-2">
                         <div className="text-xs font-black opacity-60">{date}</div>
                         {(flights as FlightInfo[]).map((f, i) => (
-                           <div key={i} className={`group relative p-4 rounded-xl border flex items-center justify-between ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                              <div>
-                                 <div className="font-black">{f.code}</div>
-                                 <div className="text-xs opacity-60">{f.airport}</div>
+                           <div key={i} className={`group p-3 rounded-xl border flex items-center gap-3 ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                              <div className="flex-1 min-w-0">
+                                 <div className="font-black truncate">{f.code}</div>
+                                 <div className="text-xs opacity-60 truncate">{f.airport}</div>
                               </div>
-                              <div className="text-right">
-                                 <div className="text-xs font-bold">{f.gate ? `Gate ${f.gate}` : ''}</div>
-                                 <div className="text-[10px] opacity-60">{f.transport}</div>
+                              <div className="text-right flex-1 min-w-0">
+                                 <div className="text-xs font-bold truncate">{f.gate ? `Gate ${f.gate}` : ''}</div>
+                                 <div className="text-[10px] opacity-60 truncate">{f.transport}</div>
                               </div>
-                              <div className="absolute top-2 right-2 flex gap-1">
-                                 <button onClick={() => handleOpenFlightModal('complex', date, i)} className="p-1.5 bg-white text-indigo-600 rounded-lg shadow hover:bg-indigo-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
-                                 <button onClick={() => handleDeleteFlight('complex', date, i)} className="p-1.5 bg-white text-rose-500 rounded-lg shadow hover:bg-rose-50"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                              <div className="flex gap-1 shrink-0 ml-2">
+                                 <button onClick={() => handleOpenFlightModal('complex', date, i)} className="p-1.5 bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 rounded-lg shadow hover:bg-indigo-50 dark:hover:bg-zinc-700"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></button>
+                                 <button onClick={() => handleDeleteFlight('complex', date, i)} className="p-1.5 bg-white dark:bg-zinc-800 text-rose-500 rounded-lg shadow hover:bg-rose-50 dark:hover:bg-zinc-700"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
                               </div>
                            </div>
                         ))}
