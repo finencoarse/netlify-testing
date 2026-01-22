@@ -873,7 +873,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                               {comment.author.charAt(0)}
                            </div>
                            <div>
-                              <p className="text-xs font-bold">{comment.author} <span className="text-[9px] font-normal opacity-50 ml-1">{new Date(comment.date).toLocaleDateString()}</p>
+                              <p className="text-xs font-bold">{comment.author} <span className="text-[9px] font-normal opacity-50 ml-1">{new Date(comment.date).toLocaleDateString()}</span></p>
                               <p className="text-sm opacity-80">{comment.text}</p>
                            </div>
                         </div>
@@ -1391,7 +1391,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
                  {/* How to get there */}
                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.howToGetThere}</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.howToGet there}</label>
                     <input 
                       value={eventForm.transportMethod || ''}
                       onChange={e => setEventForm({...eventForm, transportMethod: e.target.value})}
