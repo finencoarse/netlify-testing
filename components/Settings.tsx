@@ -37,6 +37,8 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [inputSyncId, setInputSyncId] = useState('');
+  const [isEditingId, setIsEditingId] = useState(false);
+  const [tempId, setTempId] = useState('');
 
   // Custom Config State
   const [showConfig, setShowConfig] = useState(false);
@@ -97,14 +99,18 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     if (!inputSyncId.trim()) return;
     setIsSyncing(true);
     try {
-      const data = await SupabaseService.loadGlobalBackup(inputSyncId.trim().toUpperCase());
+      const targetId = inputSyncId.trim().toUpperCase();
+      const data = await SupabaseService.loadGlobalBackup(targetId);
       if (data) {
-        if (window.confirm("Found backup! Overwrite current data?")) {
+        if (window.confirm(`Found backup for ID "${targetId}"! \n\nThis will overwrite your current local data and link your app to this ID for future backups.\n\nContinue?`)) {
           onImportData(data);
-          // If restoring from another ID, assume user wants to adopt that ID
-          setSyncId(inputSyncId.trim().toUpperCase());
-          localStorage.setItem('wanderlust_sync_id', inputSyncId.trim().toUpperCase());
-          alert("Restore successful!");
+          
+          // CRITICAL: Replace the generated ID with the user's input ID
+          setSyncId(targetId);
+          localStorage.setItem('wanderlust_sync_id', targetId);
+          
+          alert(`Restore successful! \nYour Sync ID is now: ${targetId}. \nFuture backups will overwrite this ID.`);
+          setInputSyncId('');
         }
       } else {
         alert("No backup found for this ID.");
@@ -112,6 +118,58 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     } catch (e) {
       console.error(e);
       alert("Failed to restore. Please check connection.");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const startEditingId = () => {
+    setTempId(syncId);
+    setIsEditingId(true);
+  };
+
+  const saveEditedId = async () => {
+    const newId = tempId.trim().toUpperCase();
+    
+    // 1. Basic validation (Cancel if empty or unchanged)
+    if (!newId || newId === syncId) {
+      setIsEditingId(false);
+      return;
+    }
+
+    // 2. Format validation
+    if (newId.length < 4) {
+      alert("ID must be at least 4 characters long.");
+      return;
+    }
+    
+    // Allow A-Z, 0-9, and hyphens only
+    if (!/^[A-Z0-9-]+$/.test(newId)) {
+      alert("ID can only contain uppercase letters, numbers, and hyphens.");
+      return;
+    }
+
+    // 3. Collision Check
+    setIsSyncing(true); // Show loading state
+    try {
+      const existingData = await SupabaseService.loadGlobalBackup(newId);
+      
+      let confirmMsg = `Switch Sync ID to "${newId}"?`;
+      
+      if (existingData) {
+        confirmMsg = `⚠️ WARNING: ID ALREADY IN USE\n\nThe ID "${newId}" already has cloud data associated with it.\n\nIf you switch to this ID and click 'Backup Now', you will OVERWRITE the existing data.\n\nOnly proceed if this is YOUR ID.`;
+      } else {
+        confirmMsg += `\n\nThis ID appears to be available. It will be registered to you upon your first backup.`;
+      }
+
+      if (window.confirm(confirmMsg)) {
+        setSyncId(newId);
+        localStorage.setItem('wanderlust_sync_id', newId);
+        setIsEditingId(false);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Could not verify ID availability. Please check your connection.");
     } finally {
       setIsSyncing(false);
     }
@@ -274,10 +332,35 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-4">
-              <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Your Sync ID</label>
-              <div className={`p-4 rounded-xl font-mono text-2xl font-black text-center tracking-widest select-all ${darkMode ? 'bg-black' : 'bg-zinc-100'}`}>
-                {syncId}
+              <div className="flex justify-between items-center">
+                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Your Sync ID</label>
+                <button onClick={startEditingId} className="text-[10px] font-black uppercase tracking-widest text-indigo-500 hover:underline">
+                  Edit
+                </button>
               </div>
+              
+              {isEditingId ? (
+                <div className="flex gap-2">
+                  <input 
+                    value={tempId}
+                    onChange={(e) => setTempId(e.target.value.toUpperCase())}
+                    className={`flex-1 p-4 rounded-xl font-mono text-xl font-black tracking-widest outline-none border-2 focus:border-indigo-500 uppercase ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                    autoFocus
+                  />
+                  <button 
+                    onClick={saveEditedId} 
+                    disabled={isSyncing}
+                    className="px-4 rounded-xl bg-indigo-600 text-white font-bold disabled:opacity-50"
+                  >
+                    {isSyncing ? '...' : '✓'}
+                  </button>
+                </div>
+              ) : (
+                <div className={`p-4 rounded-xl font-mono text-2xl font-black text-center tracking-widest select-all ${darkMode ? 'bg-black' : 'bg-zinc-100'}`}>
+                  {syncId}
+                </div>
+              )}
+
               <p className="text-xs leading-relaxed opacity-60">
                 {t.backupDescription || "Securely backup your Trips, Budget, and Profile."}
               </p>
@@ -310,6 +393,9 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
               >
                 {t.restore}
               </button>
+              <p className="text-[10px] opacity-50 text-center">
+                Restoring will replace your current Sync ID with the one above.
+              </p>
             </div>
           </div>
         </section>
