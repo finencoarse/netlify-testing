@@ -14,9 +14,10 @@ interface CalendarProps {
   onOpenTrip: (id: string) => void;
   onUpdateEvents: (events: CustomEvent[]) => void;
   onCombineTrips: (ids: string[]) => void;
+  onUpdateTrip: (trip: Trip) => void;
 }
 
-const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, darkMode, userProfile, onOpenTrip, onUpdateEvents, onCombineTrips }) => {
+const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, darkMode, userProfile, onOpenTrip, onUpdateEvents, onCombineTrips, onUpdateTrip }) => {
   const t = translations[language];
   const [currentDate, setCurrentDate] = useState(() => {
     const now = new Date();
@@ -28,14 +29,34 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
   const [showHolidayModal, setShowHolidayModal] = useState(false);
   const [newHoliday, setNewHoliday] = useState({ name: '', date: '' });
   const [isSyncing, setIsSyncing] = useState(false);
-  
   const [holidayRegion, setHolidayRegion] = useState(userProfile.nationality);
+
+  // --- Drag and Drop State ---
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverDate, setDragOverDate] = useState<string | null>(null);
 
   const toLocalISOString = (date: Date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  };
+
+  const getUTCDate = (dateStr: string) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  };
+
+  const addDays = (dateStr: string, days: number): string => {
+    const d = getUTCDate(dateStr);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().split('T')[0];
+  };
+
+  const getDayDiff = (d1: string, d2: string): number => {
+    const date1 = getUTCDate(d1);
+    const date2 = getUTCDate(d2);
+    return Math.round((date2.getTime() - date1.getTime()) / (1000 * 60 * 60 * 24));
   };
 
   const daysInMonth = useMemo(() => {
@@ -109,9 +130,100 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
     }
   };
 
-  /**
-   * Generates and downloads an .ics file containing trips and custom events.
-   */
+  // --- NEW DRAG AND DROP LOGIC ---
+
+  const onDragStart = (e: React.DragEvent, tripId: string, startDate: string) => {
+    e.stopPropagation();
+    // Set standard data transfer
+    e.dataTransfer.setData('tripId', tripId);
+    e.dataTransfer.setData('startDate', startDate);
+    e.dataTransfer.effectAllowed = 'move';
+    
+    // Set internal state for visual feedback
+    setDraggingId(tripId);
+  };
+
+  const onDragOver = (e: React.DragEvent, dateStr: string) => {
+    e.preventDefault(); // CRITICAL: Allows the element to be a drop target
+    e.stopPropagation();
+    
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverDate !== dateStr) {
+      setDragOverDate(dateStr);
+    }
+  };
+
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    // Optional: could clear dragOverDate here, but usually onDragOver handles the switch
+  };
+
+  const onDrop = (e: React.DragEvent, targetDate: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Clear visual states
+    setDraggingId(null);
+    setDragOverDate(null);
+
+    const tripId = e.dataTransfer.getData('tripId');
+    const originalDate = e.dataTransfer.getData('startDate');
+
+    if (!tripId || !originalDate) return;
+    
+    if (originalDate === targetDate) return;
+
+    const trip = trips.find(t => t.id === tripId);
+    if (!trip) return;
+
+    const diff = getDayDiff(originalDate, targetDate);
+    if (diff === 0) return;
+
+    if (window.confirm(`Move "${trip.title}" to start on ${targetDate}?`)) {
+        // Calculate new dates
+        const newStartDate = addDays(trip.startDate, diff);
+        const newEndDate = addDays(trip.endDate, diff);
+
+        // Shift Itinerary
+        const newItinerary: Record<string, any[]> = {};
+        Object.entries(trip.itinerary).forEach(([d, items]) => {
+            newItinerary[addDays(d, diff)] = items;
+        });
+
+        // Shift Flights
+        const newFlights: Record<string, any[]> = {};
+        if (trip.flights) {
+            Object.entries(trip.flights).forEach(([d, items]) => {
+                newFlights[addDays(d, diff)] = items;
+            });
+        }
+        
+        // Shift Ratings
+        const newDayRatings: Record<string, number> = {};
+        if (trip.dayRatings) {
+            Object.entries(trip.dayRatings).forEach(([d, r]) => {
+                newDayRatings[addDays(d, diff)] = r;
+            });
+        }
+
+        // Shift Expenses
+        const newExpenses = (trip.expenses || []).map(exp => ({
+            ...exp,
+            date: exp.date ? addDays(exp.date, diff) : exp.date
+        }));
+
+        onUpdateTrip({
+            ...trip,
+            startDate: newStartDate,
+            endDate: newEndDate,
+            itinerary: newItinerary,
+            flights: newFlights,
+            dayRatings: newDayRatings,
+            expenses: newExpenses
+        });
+    }
+  };
+
   const exportToIcal = () => {
     const formatIcalDate = (dateStr: string) => {
       return dateStr.replace(/-/g, '') + 'T000000Z';
@@ -125,13 +237,11 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
       'METHOD:PUBLISH'
     ];
 
-    // Add Trips
     trips.forEach(trip => {
       icsContent.push('BEGIN:VEVENT');
       icsContent.push(`UID:trip-${trip.id}@wanderlust.app`);
       icsContent.push(`DTSTAMP:${formatIcalDate(new Date().toISOString().split('T')[0])}`);
       icsContent.push(`DTSTART;VALUE=DATE:${trip.startDate.replace(/-/g, '')}`);
-      // iCal DTEND for all-day events is exclusive, so we add 1 day
       const endDate = new Date(trip.endDate);
       endDate.setDate(endDate.getDate() + 1);
       icsContent.push(`DTEND;VALUE=DATE:${endDate.toISOString().split('T')[0].replace(/-/g, '')}`);
@@ -141,7 +251,6 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
       icsContent.push('END:VEVENT');
     });
 
-    // Add Custom Events
     customEvents.forEach(event => {
       icsContent.push('BEGIN:VEVENT');
       icsContent.push(`UID:event-${event.id}@wanderlust.app`);
@@ -170,7 +279,6 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-3xl font-black tracking-tight">{monthName}</h2>
         <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-          {/* Holiday Region Selector */}
           <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-2xl overflow-x-auto no-scrollbar max-w-full">
             {Object.keys(HOLIDAY_DATABASE).map(region => (
               <button
@@ -246,10 +354,12 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
         ))}
         {daysInMonth.map((date, idx) => {
           if (!date) return <div key={`pad-${idx}`} className={`h-32 sm:h-44 ${darkMode ? 'bg-zinc-950/50' : 'bg-zinc-50/50'}`} />;
+          const dateStr = toLocalISOString(date);
           const { dayTrips, dayEvents, dayRegionHolidays } = getEventsForDay(date);
           const isToday = new Date().toDateString() === date.toDateString();
           const isSunday = date.getDay() === 0;
           const hasHoliday = dayRegionHolidays.length > 0;
+          const isDragTarget = dragOverDate === dateStr;
 
           const dateLabelColor = (isSunday || hasHoliday)
             ? 'text-red-600 dark:text-red-400' 
@@ -257,45 +367,60 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
 
           return (
             <div 
-              key={date.toISOString()} 
+              key={date.toISOString()}
               onClick={() => handleDayClick(date)}
-              className={`h-32 sm:h-44 p-2 transition-colors cursor-pointer relative group ${darkMode ? 'bg-zinc-900 hover:bg-zinc-800' : 'bg-white hover:bg-zinc-50'} ${isToday ? 'ring-2 ring-indigo-500 inset-0 z-10' : ''}`}
+              // Explicit Drag Events on the Cell Container
+              onDragOver={(e) => onDragOver(e, dateStr)}
+              onDragLeave={onDragLeave}
+              onDrop={(e) => onDrop(e, dateStr)}
+              className={`h-32 sm:h-44 p-2 transition-all cursor-pointer relative group 
+                ${darkMode ? 'bg-zinc-900 hover:bg-zinc-800' : 'bg-white hover:bg-zinc-50'} 
+                ${isToday ? 'ring-2 ring-indigo-500 inset-0 z-10' : ''}
+                ${isDragTarget ? 'bg-indigo-50 dark:bg-indigo-900/20 border-2 border-dashed border-indigo-500' : ''}
+              `}
             >
-              <span className={`text-[10px] font-black tabular-nums ${dateLabelColor}`}>{date.getDate()}</span>
-              
-              <div className="mt-2 space-y-1 overflow-y-auto max-h-[calc(100%-1.5rem)] no-scrollbar">
-                {dayRegionHolidays.map((holiday, hIdx) => (
-                  <div 
-                    key={`hol-${hIdx}`}
-                    className="text-[8px] font-black px-1.5 py-0.5 rounded bg-rose-600 text-white truncate"
-                  >
-                    🚩 {holiday.name}
-                  </div>
-                ))}
-                {dayEvents.map(event => (
-                  <div 
-                    key={event.id} 
-                    className="text-[8px] font-black px-1.5 py-0.5 rounded bg-amber-100 border border-amber-200 text-amber-700 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-400 truncate"
-                  >
-                    📍 {event.name}
-                  </div>
-                ))}
-                {dayTrips.map(trip => (
-                  <button 
-                    key={trip.id} 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isCombineMode) {
-                        toggleTripSelection(trip.id);
-                      } else {
-                        onOpenTrip(trip.id);
-                      }
-                    }} 
-                    className={`w-full text-left text-[8px] font-black px-1.5 py-1 rounded shadow-md truncate transition-all transform hover:scale-[1.02] border ${selectedCombineIds.includes(trip.id) ? 'ring-2 ring-indigo-500 bg-indigo-600 text-white' : (trip.status === 'past' ? 'bg-emerald-500 border-emerald-600 text-white' : 'bg-indigo-500 border-indigo-600 text-white')}`}
-                  >
-                    ✈️ {trip.title}
-                  </button>
-                ))}
+              <div className="w-full h-full flex flex-col pointer-events-none">
+                <span className={`text-[10px] font-black tabular-nums ${dateLabelColor}`}>{date.getDate()}</span>
+                
+                <div className="mt-2 space-y-1 overflow-y-auto max-h-[calc(100%-1.5rem)] no-scrollbar pointer-events-auto">
+                  {dayRegionHolidays.map((holiday, hIdx) => (
+                    <div 
+                      key={`hol-${hIdx}`}
+                      className="text-[8px] font-black px-1.5 py-0.5 rounded bg-rose-600 text-white truncate"
+                    >
+                      🚩 {holiday.name}
+                    </div>
+                  ))}
+                  {dayEvents.map(event => (
+                    <div 
+                      key={event.id} 
+                      className="text-[8px] font-black px-1.5 py-0.5 rounded bg-amber-100 border border-amber-200 text-amber-700 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-400 truncate"
+                    >
+                      📍 {event.name}
+                    </div>
+                  ))}
+                  {dayTrips.map(trip => (
+                    <div
+                      key={trip.id}
+                      draggable={!isCombineMode}
+                      onDragStart={(e) => onDragStart(e, trip.id, dateStr)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (isCombineMode) {
+                          toggleTripSelection(trip.id);
+                        } else {
+                          onOpenTrip(trip.id);
+                        }
+                      }} 
+                      className={`w-full text-left text-[8px] font-black px-1.5 py-1 rounded shadow-md truncate transition-all transform hover:scale-[1.02] border cursor-grab active:cursor-grabbing
+                        ${selectedCombineIds.includes(trip.id) ? 'ring-2 ring-indigo-500 bg-indigo-600 text-white' : (trip.status === 'past' ? 'bg-emerald-500 border-emerald-600 text-white' : 'bg-indigo-500 border-indigo-600 text-white')}
+                        ${draggingId === trip.id ? 'opacity-50' : ''}
+                      `}
+                    >
+                      ✈️ {trip.title}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           );
