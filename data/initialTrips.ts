@@ -87,7 +87,7 @@ export const getInitialTrips = (language: Language): Trip[] => {
       endDate: '2023-11-20',
       description: t1.description,
       status: 'past',
-      coverImage: 'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?q=80&w=1200&auto=format&fit=crop',
+      coverImage: 'https://images.unsplash.com/photo-1506197603052-3cc9c3a201bd?q=80&w=1600&auto=format&fit=crop', // Refined: Autumn Kiyomizu-dera
       defaultCurrency: 'HKD',
       budget: 26000,
       departureFlight: {
@@ -107,17 +107,17 @@ export const getInitialTrips = (language: Language): Trip[] => {
         actualPrice: 4500
       },
       photos: [
-        { id: 'p10', url: 'https://images.unsplash.com/photo-1542640244-7e67286feb90?q=80&w=800', caption: t1.photos.p10, date: '2023-11-10', tags: ['Arrival'], isFavorite: false, type: 'image' },
-        { id: 'p11', url: 'https://images.unsplash.com/photo-1478358173913-b40e1d859d78?q=80&w=800', caption: t1.photos.p11, date: '2023-11-11', tags: ['Shrine', 'Hiking'], isFavorite: true, type: 'image' },
-        { id: 'p1', url: 'https://images.unsplash.com/photo-1545569341-9eb8b30979d9?q=80&w=800', caption: t1.photos.p1, date: '2023-11-12', tags: ['Zen', 'Temple'], isFavorite: true, type: 'image' },
-        { id: 'p2', url: 'https://images.unsplash.com/photo-1599723382705-7762b7194602?q=80&w=800', caption: t1.photos.p2, date: '2023-11-13', tags: ['Nature'], isFavorite: false, type: 'image' },
-        { id: 'p14', url: 'https://images.unsplash.com/photo-1528164344705-47542687000d?q=80&w=800', caption: t1.photos.p14, date: '2023-11-14', tags: ['Sunset', 'History'], isFavorite: true, type: 'image' },
-        { id: 'p15', url: 'https://images.unsplash.com/photo-1492571350019-22de08371fd3?q=80&w=800', caption: t1.photos.p15, date: '2023-11-15', tags: ['Culture', 'Night'], isFavorite: false, type: 'image' },
-        { id: 'p16', url: 'https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?q=80&w=800', caption: t1.photos.p16, date: '2023-11-16', tags: ['Peaceful'], isFavorite: false, type: 'image' },
-        { id: 'p17', url: 'https://images.unsplash.com/photo-1484606772793-9c4ce93309a5?q=80&w=800', caption: t1.photos.p17, date: '2023-11-17', tags: ['Animals', 'DayTrip'], isFavorite: true, type: 'image' },
-        { id: 'p18', url: 'https://images.unsplash.com/photo-1552055944-13b257e1c74a?q=80&w=800', caption: t1.photos.p18, date: '2023-11-18', tags: ['Architecture'], isFavorite: false, type: 'image' },
-        { id: 'p19', url: 'https://images.unsplash.com/photo-1607301406259-dfb186e15de8?q=80&w=800', caption: t1.photos.p19, date: '2023-11-19', tags: ['Food', 'FineDining'], isFavorite: true, type: 'image' },
-        { id: 'p20', url: 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=800', caption: t1.photos.p20, date: '2023-11-20', tags: ['Departure'], isFavorite: false, type: 'image' },
+        { id: 'p10', url: 'https://images.unsplash.com/photo-1536762363297-c8209252a781?q=80&w=800', caption: t1.photos.p10, date: '2023-11-10', tags: ['Arrival'], isFavorite: false, type: 'image' },
+        { id: 'p11', url: 'https://images.unsplash.com/photo-1558862107-d49ef2a04d72?q=80&w=800', caption: t1.photos.p11, date: '2023-11-11', tags: ['Shrine', 'Hiking'], isFavorite: true, type: 'image' },
+        { id: 'p1', url: 'https://images.unsplash.com/photo-1624253321171-1be53e12f5f4?q=80&w=800', caption: t1.photos.p1, date: '2023-11-12', tags: ['Zen', 'Temple'], isFavorite: true, type: 'image' },
+        { id: 'p2', url: 'https://images.unsplash.com/photo-1625296068341-26d97c01b2a9?q=80&w=800', caption: t1.photos.p2, date: '2023-11-13', tags: ['Nature'], isFavorite: false, type: 'image' },
+        { id: 'p14', url: 'https://images.unsplash.com/photo-1576675466969-38eeae4b41f6?q=80&w=800', caption: t1.photos.p14, date: '2023-11-14', tags: ['Sunset', 'History'], isFavorite: true, type: 'image' },
+        { id: 'p15', url: 'https://images.unsplash.com/photo-1578469550956-0e16b69c6a3d?q=80&w=800', caption: t1.photos.p15, date: '2023-11-15', tags: ['Culture', 'Night'], isFavorite: false, type: 'image' },
+        { id: 'p16', url: 'https://images.unsplash.com/photo-1601823984263-b87b5972c2c1?q=80&w=800', caption: t1.photos.p16, date: '2023-11-16', tags: ['Peaceful'], isFavorite: false, type: 'image' },
+        { id: 'p17', url: 'https://images.unsplash.com/photo-1536767570499-2776c703b468?q=80&w=800', caption: t1.photos.p17, date: '2023-11-17', tags: ['Animals', 'DayTrip'], isFavorite: true, type: 'image' },
+        { id: 'p18', url: 'https://images.unsplash.com/photo-1570783765276-23743cb8402c?q=80&w=800', caption: t1.photos.p18, date: '2023-11-18', tags: ['Architecture'], isFavorite: false, type: 'image' },
+        { id: 'p19', url: 'https://images.unsplash.com/photo-1609139003551-ee40494ec63e?q=80&w=800', caption: t1.photos.p19, date: '2023-11-19', tags: ['Food', 'FineDining'], isFavorite: true, type: 'image' },
+        { id: 'p20', url: 'https://images.unsplash.com/photo-1549180030-48bf079fb38a?q=80&w=800', caption: t1.photos.p20, date: '2023-11-20', tags: ['Departure'], isFavorite: false, type: 'image' },
       ],
       comments: [
         { id: 'c1', text: t1.comments.c1, author: 'Wanderer', date: '2023-11-21T10:00:00Z' }
@@ -182,7 +182,7 @@ export const getInitialTrips = (language: Language): Trip[] => {
       endDate: '2024-04-20',
       description: t2.description,
       status: 'future',
-      coverImage: 'https://images.unsplash.com/photo-1590559899731-a3828395a22c?q=80&w=1200&auto=format&fit=crop',
+      coverImage: 'https://images.unsplash.com/photo-1590253232005-3726012708d9?q=80&w=1200&auto=format&fit=crop', // Refined: Dotonbori Night
       defaultCurrency: 'HKD',
       budget: 23400,
       departureFlight: {
