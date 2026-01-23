@@ -149,7 +149,7 @@ export class GeminiService {
       const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/png';
 
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
+        model: 'gemini-3-pro-image-preview',
         contents: [
           {
             parts: [
@@ -182,6 +182,32 @@ export class GeminiService {
     } catch (error) {
       console.error('Error editing image with Gemini:', error);
       throw error;
+    }
+  }
+
+  static async generateImage(prompt: string): Promise<string | null> {
+    this.incrementUsage();
+    try {
+      const ai = this.getClient();
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: { parts: [{ text: prompt }] },
+      });
+
+      const candidate = response.candidates?.[0];
+      if (!candidate?.content?.parts) {
+        throw new Error('Gemini returned an empty response.');
+      }
+
+      for (const part of candidate.content.parts) {
+        if (part.inlineData) {
+          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        }
+      }
+      return null;
+    } catch (e) {
+      console.error("Image generation failed:", e);
+      return null;
     }
   }
 
@@ -377,7 +403,7 @@ export class GeminiService {
     days: number, 
     budget: number, 
     currency: string,
-    interests: string,
+    interests: string, 
     language: string
   ): Promise<Partial<Trip> | null> {
     this.incrementUsage();
