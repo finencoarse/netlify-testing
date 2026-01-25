@@ -25,12 +25,57 @@ export class GeminiService {
     localStorage.setItem(STORAGE_KEY_GEMINI_COUNT, (count + 1).toString());
   }
 
-  private static getClient() {
+  /**
+   * Centralized method to generate content.
+   * Automatically switches between Client SDK (if key exists) and Vercel Proxy.
+   */
+  private static async generate(model: string, contents: any, config?: any): Promise<{ text: string }> {
+    this.incrementUsage();
     const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      throw new Error("API Key is missing. Please configure it in your environment or select one via the API Key Selection screen.");
+
+    // STRATEGY 1: Client-Side SDK (Preferred for speed if key is available locally)
+    if (apiKey && apiKey !== 'PASTE_YOUR_KEY_HERE') {
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({ model, contents, config });
+        return { text: response.text || '' };
+      } catch (clientError) {
+        console.warn("Client SDK failed, trying proxy...", clientError);
+        // If client fails (e.g. region block), fall through to proxy
+      }
     }
-    return new GoogleGenAI({ apiKey });
+
+    // STRATEGY 2: Vercel Proxy (Serverless Function)
+    try {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, contents, config })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Proxy Error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // The proxy returns { text, candidates, ... }
+      // We prioritize the pre-extracted text
+      let text = data.text;
+      
+      // Fallback extraction if text is missing but candidates exist (raw structure)
+      if (!text && data.candidates?.[0]?.content?.parts?.[0]) {
+         const part = data.candidates[0].content.parts[0];
+         text = part.text || '';
+      }
+
+      return { text: text || '' };
+
+    } catch (proxyError) {
+      console.error("Gemini Generation Failed (Proxy):", proxyError);
+      throw proxyError;
+    }
   }
 
   private static extractJson(text: string | undefined): any {
@@ -55,14 +100,8 @@ export class GeminiService {
     }
   }
 
-  /**
-   * Translates the text content of a trip to the target language.
-   */
   static async translateTrip(trip: Trip, language: string): Promise<Trip | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-      
       const languageNames: Record<string, string> = {
         'en': 'English',
         'zh-TW': 'Traditional Chinese',
@@ -80,28 +119,14 @@ export class GeminiService {
 
       const prompt = `
       Translate the following JSON object's text values to ${targetLanguage}.
-      
-      Rules:
-      1. Preserve the JSON structure EXACTLY.
-      2. Only translate values for the keys: "title", "description", "location", "transportMethod", "spendingDescription".
-      3. Do NOT translate IDs, times, numbers, or currency codes.
-      4. Keep the tone inspiring and travel-focused.
-      
-      Input JSON:
-      ${JSON.stringify(minimalTrip)}
-      
-      Return ONLY the valid JSON. No markdown.
+      Preserve structure EXACTLY. Only translate: "title", "description", "location", "transportMethod", "spendingDescription".
+      Do NOT translate IDs, times, numbers, or currency codes.
+      Input: ${JSON.stringify(minimalTrip)}
+      Return ONLY valid JSON.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        }
-      });
-
-      const translatedData = this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { responseMimeType: 'application/json' });
+      const translatedData = this.extractJson(text);
       if (!translatedData) return null;
 
       return {
@@ -111,7 +136,6 @@ export class GeminiService {
         description: translatedData.description || trip.description,
         itinerary: translatedData.itinerary || trip.itinerary
       };
-
     } catch (e) {
       console.error("Translation failed:", e);
       return null;
@@ -119,27 +143,15 @@ export class GeminiService {
   }
 
   static async getExchangeRate(fromCurrency: string, toCurrency: string, date?: string): Promise<number | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
       const dateQuery = date ? `on ${date}` : "today";
       const prompt = `
       Find the exact exchange rate from ${fromCurrency} to ${toCurrency} ${dateQuery}.
-      
-      Return ONLY a raw JSON object. Do not include markdown formatting.
-      Format: { "rate": 145.5 }
+      Return ONLY a raw JSON object: { "rate": 145.5 }
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          // responseMimeType: 'application/json' removed because it conflicts with tools
-        },
-      });
-
-      const result = this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { tools: [{ googleSearch: {} }] });
+      const result = this.extractJson(text);
       return result?.rate || null;
     } catch (e) {
       console.error("Exchange rate fetch failed:", e);
@@ -148,10 +160,7 @@ export class GeminiService {
   }
 
   static async editImage(base64Image: string, prompt: string): Promise<string | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-      
       const parts = base64Image.split(',');
       if (parts.length < 2) throw new Error("Invalid base64 image string");
       
@@ -159,58 +168,89 @@ export class GeminiService {
       const mimeTypeMatch = parts[0].match(/:(.*?);/);
       const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'image/png';
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
-        contents: [
-          {
-            parts: [
-              {
-                inlineData: {
-                  data: cleanBase64,
-                  mimeType: mimeType,
-                },
+      // For proxy compatibility, we construct the 'contents' array structure manually
+      // The generate() method will pass this directly to SDK or Proxy
+      const contents = [
+        {
+          parts: [
+            {
+              inlineData: {
+                data: cleanBase64,
+                mimeType: mimeType,
               },
-              {
-                text: prompt,
-              },
-            ],
-          }
-        ],
-      });
+            },
+            {
+              text: prompt,
+            },
+          ],
+        }
+      ];
 
-      const candidate = response.candidates?.[0];
-      if (!candidate?.content?.parts) {
-        throw new Error('Gemini returned an empty response.');
+      // Note: We access the low-level generate directly because we need specific model handling
+      // For images, we can't easily use the generic wrapper if we need to return the blob
+      // So we implement logic here similar to generate()
+      
+      const apiKey = process.env.API_KEY;
+      let response;
+
+      if (apiKey && apiKey !== 'PASTE_YOUR_KEY_HERE') {
+         const ai = new GoogleGenAI({ apiKey });
+         response = await ai.models.generateContent({
+            model: 'gemini-3-pro-image-preview',
+            contents
+         });
+      } else {
+         const res = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gemini-3-pro-image-preview', contents })
+         });
+         if (!res.ok) throw new Error('Proxy error');
+         response = await res.json();
       }
 
-      for (const part of candidate.content.parts) {
+      // Handle response structure (Proxy returns serialized object, SDK returns class)
+      const candidates = response.candidates;
+      if (!candidates?.[0]?.content?.parts) return null;
+
+      for (const part of candidates[0].content.parts) {
         if (part.inlineData) {
           return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         }
       }
-      
       return null;
     } catch (error) {
-      console.error('Error editing image with Gemini:', error);
-      throw error;
+      console.error('Error editing image:', error);
+      return null;
     }
   }
 
   static async generateImage(prompt: string): Promise<string | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: { parts: [{ text: prompt }] },
-      });
+      const contents = { parts: [{ text: prompt }] };
+      const apiKey = process.env.API_KEY;
+      let response;
 
-      const candidate = response.candidates?.[0];
-      if (!candidate?.content?.parts) {
-        throw new Error('Gemini returned an empty response.');
+      if (apiKey && apiKey !== 'PASTE_YOUR_KEY_HERE') {
+         const ai = new GoogleGenAI({ apiKey });
+         response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents
+         });
+      } else {
+         const res = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gemini-2.5-flash-image', contents })
+         });
+         if (!res.ok) throw new Error('Proxy error');
+         response = await res.json();
       }
 
-      for (const part of candidate.content.parts) {
+      const candidates = response.candidates;
+      if (!candidates?.[0]?.content?.parts) return null;
+
+      for (const part of candidates[0].content.parts) {
         if (part.inlineData) {
           return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
         }
@@ -223,58 +263,66 @@ export class GeminiService {
   }
 
   static async getMapRoute(location: string, items: ItineraryItem[], language: string = 'en'): Promise<{ text: string; links: { uri: string; title: string }[] }> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-      
       let latLng = undefined;
+      // Note: Geolocation works on client side only.
+      // If using proxy, the proxy can't see client's navigator. 
+      // We pass the coordinates in toolConfig.
       try {
         const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 });
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 });
         });
         latLng = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      } catch (e) {
-        // Ignore geolocation errors
-      }
-
-      const languageNames: Record<string, string> = {
-        'en': 'English',
-        'zh-TW': 'Traditional Chinese',
-        'ja': 'Japanese',
-        'ko': 'Korean'
-      };
-      const targetLanguage = languageNames[language] || 'English';
+      } catch (e) { /* ignore */ }
 
       const itemTitles = items.map(i => i.title).join(', ');
-      const prompt = `I am visiting ${location}. Here is my itinerary for today: ${itemTitles}. 
-      Please suggest the most efficient travel route between these locations. 
-      Explain why this order is best and provide Google Maps links for each place.
-      IMPORTANT: Respond in ${targetLanguage}.`;
+      const prompt = `Visiting ${location}. Itinerary: ${itemTitles}. 
+      Suggest efficient route. Explain order. Provide Google Maps links.
+      Respond in ${language}.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleMaps: {} }],
-          toolConfig: {
-            retrievalConfig: {
-              latLng: latLng
-            }
-          }
-        },
-      });
+      const config = {
+        tools: [{ googleMaps: {} }],
+        toolConfig: { retrievalConfig: { latLng } }
+      };
 
-      const text = response.text || "No suggestion found.";
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      // We need to access grounding metadata, so we can't use the simple generate() wrapper which returns text only
+      // We'll reimplement the call logic here or modify generate() to return more data.
+      // Let's reimplement locally for precision.
       
+      const apiKey = process.env.API_KEY;
+      let response;
+
+      if (apiKey && apiKey !== 'PASTE_YOUR_KEY_HERE') {
+         const ai = new GoogleGenAI({ apiKey });
+         response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config
+         });
+      } else {
+         const res = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gemini-2.5-flash', contents: prompt, config })
+         });
+         response = await res.json();
+      }
+
+      // Handle extraction
+      let text = response.text; // SDK getter
+      if (typeof text !== 'string') { // Proxy raw object
+         text = response.text || response.candidates?.[0]?.content?.parts?.[0]?.text || "No suggestion found.";
+      }
+
+      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
       const links = groundingChunks
-        .filter(chunk => chunk.maps)
-        .map(chunk => ({
-          uri: chunk.maps!.uri,
-          title: chunk.maps!.title || "View on Maps"
+        .filter((chunk: any) => chunk.maps)
+        .map((chunk: any) => ({
+          uri: chunk.maps.uri,
+          title: chunk.maps.title || "View on Maps"
         }));
 
-      return { text, links };
+      return { text: text as string, links };
     } catch (error) {
       console.error('Error with Maps grounding:', error);
       throw error;
@@ -282,48 +330,17 @@ export class GeminiService {
   }
 
   static async getEventLogistics(location: string, item: ItineraryItem, prevLocation: string | null, language: string = 'en'): Promise<{ price?: number, currency?: string, transportShort?: string, details?: string } | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
       const origin = prevLocation ? `from "${prevLocation}"` : 'from the city center';
-      
-      const languageNames: Record<string, string> = {
-        'en': 'English',
-        'zh-TW': 'Traditional Chinese',
-        'ja': 'Japanese',
-        'ko': 'Korean'
-      };
-      const targetLanguage = languageNames[language] || 'English';
-
       const prompt = `
-      I am planning a trip to "${location}".
-      Event: "${item.title}" (${item.description}).
-      
-      Task:
-      1. Find the current adult entry ticket price (if any). If free, price is 0.
-      2. Find the best public transport method to get there ${origin}.
-      
-      Return a STRICT JSON object.
-      {
-        "price": number (e.g. 2500, or 0 if free/unknown),
-        "currency": "string" (e.g. "¥", "$", "€"),
-        "transportShort": "string" (short summary, e.g. "Bus 205"),
-        "details": "string" (Detailed instructions)
-      }
-      
-      IMPORTANT: Use Google Search. Translate 'details' and 'transportShort' to ${targetLanguage}.
+      Planning trip to "${location}". Event: "${item.title}" (${item.description}).
+      Task: Find entry price & best transport ${origin}.
+      Return STRICT JSON: { "price": number, "currency": "string", "transportShort": "string", "details": "string" }
+      Translate details to ${language}.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          // responseMimeType: 'application/json' removed because it conflicts with tools
-        },
-      });
-
-      return this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { tools: [{ googleSearch: {} }] });
+      return this.extractJson(text);
     } catch (e) {
       console.error("Logistics research failed:", e);
       return null;
@@ -331,48 +348,16 @@ export class GeminiService {
   }
 
   static async getTourGuideInfo(location: string, item: ItineraryItem, language: string = 'en'): Promise<TourGuideData | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-
-      const languageNames: Record<string, string> = {
-        'en': 'English',
-        'zh-TW': 'Traditional Chinese',
-        'ja': 'Japanese',
-        'ko': 'Korean'
-      };
-      const targetLanguage = languageNames[language] || 'English';
-
       const prompt = `
-      You are an expert local tour guide. 
-      I am visiting "${item.title}" in "${location}".
-      
-      Use Google Search to find latest stories and tips.
-      
-      Return the output STRICTLY as a valid JSON object. 
-      The JSON must match this structure:
-      {
-        "story": "A short, engaging paragraph about the history (max 60 words).",
-        "mustEat": ["List of 1-3 general food types famous here"],
-        "mustOrder": ["List of 1-3 specific famous menu items"],
-        "souvenirs": ["List of 1-3 must-buy souvenir items"],
-        "reservationTips": "Any important reservation codes or booking requirements."
-      }
-      
-      IMPORTANT: Translate all the content values into ${targetLanguage}.
+      Expert tour guide for "${item.title}" in "${location}".
+      Find latest stories and tips.
+      Return JSON: { "story": "...", "mustEat": [], "mustOrder": [], "souvenirs": [], "reservationTips": "..." }
+      Translate to ${language}.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          // responseMimeType: 'application/json' removed because it conflicts with tools
-        },
-      });
-
-      return this.extractJson(response.text) as TourGuideData;
-
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { tools: [{ googleSearch: {} }] });
+      return this.extractJson(text) as TourGuideData;
     } catch (error) {
       console.error('Error getting tour guide info:', error);
       return null;
@@ -380,29 +365,14 @@ export class GeminiService {
   }
 
   static async getWeatherForecast(location: string, startDate: string, endDate: string): Promise<Record<string, { icon: string, temp: string, condition: string }> | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-
       const prompt = `
-      I need a daily weather forecast estimation for ${location} from ${startDate} to ${endDate}.
-      Based on historical weather data for this location and time of year, provide a realistic forecast.
-      
-      Return a STRICTLY valid JSON object where keys are the dates in YYYY-MM-DD format and values are objects with:
-      - "icon": A single emoji representing the weather (e.g. ☀️, 🌧️, ❄️, ⛅).
-      - "temp": Temperature range (e.g. "20°C" or "15-22°C").
-      - "condition": Short text (e.g. "Sunny", "Rainy").
+      Forecast for ${location} from ${startDate} to ${endDate}.
+      Return JSON keys YYYY-MM-DD, values { "icon": "emoji", "temp": "range", "condition": "text" }.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        }
-      });
-
-      return this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { responseMimeType: 'application/json' });
+      return this.extractJson(text);
     } catch (e) {
       console.error("Weather fetch failed:", e);
       return null;
@@ -417,60 +387,15 @@ export class GeminiService {
     interests: string, 
     language: string
   ): Promise<Partial<Trip> | null> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-
-      const languageNames: Record<string, string> = {
-        'en': 'English',
-        'zh-TW': 'Traditional Chinese',
-        'ja': 'Japanese',
-        'ko': 'Korean'
-      };
-      const targetLanguage = languageNames[language] || 'English';
-
       const prompt = `
-      I need a ${days}-day trip itinerary for ${location}.
-      Budget: ${currency}${budget}.
-      Interests/Preferences: "${interests}".
-
-      Create a detailed plan.
-      Return a STRICTLY valid JSON object.
-      
-      Structure:
-      {
-        "title": "A creative title for the trip",
-        "description": "A brief overview of the trip experience",
-        "itinerary": {
-          "1": [
-             {
-               "time": "09:00",
-               "type": "sightseeing",
-               "title": "Event Title",
-               "description": "Short description of activity",
-               "estimatedExpense": 50,
-               "currency": "${currency}",
-               "transportMethod": "Walking/Taxi/Bus"
-             }
-          ],
-          "2": []
-        }
-      }
-
-      IMPORTANT: 
-      - Translate all text values to ${targetLanguage}.
-      - Ensure costs fit within the total budget of ${budget}.
+      Create ${days}-day itinerary for ${location}. Budget: ${currency}${budget}. Interests: "${interests}".
+      Return JSON: { "title": "", "description": "", "itinerary": { "1": [ { "time": "09:00", "type": "sightseeing", "title": "", "description": "", "estimatedExpense": 0, "currency": "${currency}", "transportMethod": "" } ] } }
+      Translate to ${language}.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        }
-      });
-
-      return this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { responseMimeType: 'application/json' });
+      return this.extractJson(text);
     } catch (e) {
       console.error("Trip generation failed:", e);
       return null;
@@ -478,49 +403,15 @@ export class GeminiService {
   }
 
   static async discoverPlaces(location: string, query: string, language: string = 'en'): Promise<any[]> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-
-      const languageNames: Record<string, string> = {
-        'en': 'English',
-        'zh-TW': 'Traditional Chinese',
-        'ja': 'Japanese',
-        'ko': 'Korean'
-      };
-      const targetLanguage = languageNames[language] || 'English';
-
       const prompt = `
-      Find 5 popular and real places matching "${query}" near "${location}".
-      Use Google Search to verify they exist.
-      
-      Return a STRICT JSON object with a "places" array.
-      
-      Example structure:
-      {
-        "places": [
-          {
-            "title": "Name",
-            "description": "Short description (max 10 words)",
-            "type": "eating",
-            "estimatedExpense": 20
-          }
-        ]
-      }
-      
-      IMPORTANT: Translate content to ${targetLanguage}.
+      Find 5 places matching "${query}" near "${location}".
+      Return JSON: { "places": [ { "title": "", "description": "", "type": "eating", "estimatedExpense": 20 } ] }
+      Translate to ${language}.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          // responseMimeType: 'application/json' removed because it conflicts with tools
-        },
-      });
-
-      const result = this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { tools: [{ googleSearch: {} }] });
+      const result = this.extractJson(text);
       return result?.places || [];
     } catch (e) {
       console.error("Discovery failed:", e);
@@ -529,53 +420,16 @@ export class GeminiService {
   }
 
   static async recommendHotels(location: string, itinerary: ItineraryItem[], preferences: string, language: string): Promise<Hotel[]> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
-
-      const languageNames: Record<string, string> = {
-        'en': 'English',
-        'zh-TW': 'Traditional Chinese',
-        'ja': 'Japanese',
-        'ko': 'Korean'
-      };
-      const targetLanguage = languageNames[language] || 'English';
-
       const placeList = itinerary.map(item => item.title).slice(0, 15).join(", ");
-
       const prompt = `
-      Act as a travel expert. I need accommodation in "${location}" convenient for visiting: ${placeList}.
-      Preferences: "${preferences || 'Good location'}".
-      
-      Using Google Search, identify 3-4 suitable hotels.
-      
-      Return a STRICT JSON object.
-      {
-        "hotels": [
-          {
-            "name": "Hotel Name",
-            "description": "Brief description in ${targetLanguage}",
-            "address": "Address",
-            "price": "Price estimate string",
-            "rating": 4.5,
-            "amenities": ["Wifi"],
-            "bookingUrl": "A direct URL to book this hotel (e.g. Google Hotels, Booking.com, or official site).",
-            "reason": "Why it fits in ${targetLanguage}"
-          }
-        ]
-      }
+      Recommend 3-4 hotels in "${location}" near: ${placeList}. Preferences: "${preferences}".
+      Return JSON: { "hotels": [ { "name": "", "description": "", "address": "", "price": "", "rating": 4.5, "amenities": [], "bookingUrl": "", "reason": "" } ] }
+      Translate to ${language}.
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          // responseMimeType: 'application/json' removed because it conflicts with tools
-        }
-      });
-
-      const result = this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { tools: [{ googleSearch: {} }] });
+      const result = this.extractJson(text);
       if (!result || !result.hotels) return [];
       
       return (result.hotels || []).map((h: any) => ({ ...h, id: Math.random().toString(36).substr(2, 9) }));
@@ -586,34 +440,18 @@ export class GeminiService {
   }
 
   static async searchCountries(query: string, language: string = 'en'): Promise<string[]> {
-    this.incrementUsage();
     try {
-      const ai = this.getClient();
       const prompt = `
-      List 5 to 8 countries, regions, or territories matching the search query "${query}".
-      
-      CRITICAL REQUIREMENTS:
-      1. If the user searches for "Hong Kong", "HK", "China", or "Macau", you MUST include "Hong Kong SAR" and "Macau SAR" in the list.
-      2. If the query matches a country code (e.g. "US", "UK", "JP"), return the full country name.
-      3. Sort by relevance.
-      
-      Return a STRICT JSON object with a "countries" array of strings.
-      Example: { "countries": ["United States", "United Kingdom", "Hong Kong SAR"] }
+      List 5-8 countries/regions matching "${query}".
+      Include "Hong Kong SAR" or "Macau SAR" if relevant.
+      Return JSON: { "countries": ["Name 1", "Name 2"] }
       `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        }
-      });
-
-      const result = this.extractJson(response.text);
+      const { text } = await this.generate('gemini-2.5-flash', prompt, { responseMimeType: 'application/json' });
+      const result = this.extractJson(text);
       return result?.countries || [];
     } catch (e) {
       console.warn("Gemini country search failed, using fallback:", e);
-      // Fallback: Perform local fuzzy search on the static list
       const lowerQuery = query.toLowerCase().trim();
       return FALLBACK_COUNTRIES.filter(c => c.toLowerCase().includes(lowerQuery));
     }
