@@ -4,6 +4,17 @@ import { ItineraryItem, TourGuideData, Trip, Hotel } from "../types";
 
 const STORAGE_KEY_GEMINI_COUNT = 'wanderlust_gemini_count';
 
+// Fallback data for when Gemini is unreachable (e.g., offline or restricted region)
+const FALLBACK_COUNTRIES = [
+  "United States", "United Kingdom", "Canada", "Australia", "Japan", "South Korea", 
+  "China", "Hong Kong SAR", "Macau SAR", "Taiwan", "France", "Germany", "Italy", 
+  "Spain", "Thailand", "Vietnam", "Singapore", "Malaysia", "Indonesia", "Philippines",
+  "India", "Brazil", "Mexico", "Argentina", "Chile", "South Africa", "Egypt", 
+  "United Arab Emirates", "Saudi Arabia", "Turkey", "Russia", "Netherlands", 
+  "Switzerland", "Sweden", "Norway", "Denmark", "Finland", "Poland", "Austria", 
+  "Belgium", "Portugal", "Greece", "Ireland", "New Zealand"
+];
+
 export class GeminiService {
   static getUsageCount(): number {
     return parseInt(localStorage.getItem(STORAGE_KEY_GEMINI_COUNT) || '0', 10);
@@ -571,6 +582,40 @@ export class GeminiService {
     } catch (e) {
       console.error("Hotel recommendation failed:", e);
       return [];
+    }
+  }
+
+  static async searchCountries(query: string, language: string = 'en'): Promise<string[]> {
+    this.incrementUsage();
+    try {
+      const ai = this.getClient();
+      const prompt = `
+      List 5 to 8 countries, regions, or territories matching the search query "${query}".
+      
+      CRITICAL REQUIREMENTS:
+      1. If the user searches for "Hong Kong", "HK", "China", or "Macau", you MUST include "Hong Kong SAR" and "Macau SAR" in the list.
+      2. If the query matches a country code (e.g. "US", "UK", "JP"), return the full country name.
+      3. Sort by relevance.
+      
+      Return a STRICT JSON object with a "countries" array of strings.
+      Example: { "countries": ["United States", "United Kingdom", "Hong Kong SAR"] }
+      `;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        }
+      });
+
+      const result = this.extractJson(response.text);
+      return result?.countries || [];
+    } catch (e) {
+      console.warn("Gemini country search failed, using fallback:", e);
+      // Fallback: Perform local fuzzy search on the static list
+      const lowerQuery = query.toLowerCase().trim();
+      return FALLBACK_COUNTRIES.filter(c => c.toLowerCase().includes(lowerQuery));
     }
   }
 }
