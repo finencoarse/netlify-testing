@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Language, UserProfile, FontSize } from '../types';
 import { translations } from '../translations';
 import { getMapUsage } from '../services/mapsService';
@@ -19,10 +19,6 @@ interface SettingsProps {
   fullData: any;
   onImportData: (data: any) => void;
 }
-
-const COUNTRIES = [
-  "United States", "China", "Hong Kong", "Taiwan", "United Kingdom", "Japan"
-];
 
 const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, setDarkMode, fontSize, setFontSize, onBack, userProfile, setUserProfile, fullData, onImportData }) => {
   const t = translations[language];
@@ -45,6 +41,13 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
   const [sbUrl, setSbUrl] = useState('');
   const [sbKey, setSbKey] = useState('');
 
+  // Country Search State
+  const [countryQuery, setCountryQuery] = useState(userProfile.nationality);
+  const [countryResults, setCountryResults] = useState<string[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Initialize inputs from storage
   useEffect(() => {
     const stored = localStorage.getItem('wanderlust_custom_supabase');
@@ -65,6 +68,47 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
       setSyncId(newId);
     }
   }, [syncId]);
+
+  // Sync country query if profile updates externally
+  useEffect(() => {
+    setCountryQuery(userProfile.nationality);
+  }, [userProfile.nationality]);
+
+  // Country Search Effect
+  useEffect(() => {
+    // If query matches current and results aren't needed, skip
+    if (countryQuery === userProfile.nationality && !showResults) return;
+
+    if (!countryQuery.trim()) {
+      setCountryResults([]);
+      return;
+    }
+
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+
+    setIsSearching(true);
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const results = await GeminiService.searchCountries(countryQuery, language);
+        setCountryResults(results);
+        setShowResults(true);
+      } catch (error) {
+        console.error("Search failed", error);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 600);
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [countryQuery, language, userProfile.nationality, showResults]);
+
+  const handleSelectCountry = (country: string) => {
+    setUserProfile({ ...userProfile, nationality: country });
+    setCountryQuery(country);
+    setShowResults(false);
+  };
 
   const handlePfpUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -247,24 +291,44 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
               />
             </div>
           </div>
-          <div className="space-y-2">
+          
+          <div className="space-y-2 relative">
             <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.selectCountry}</label>
             <div className="relative">
-              <select 
-                value={userProfile.nationality} 
-                onChange={(e) => setUserProfile({...userProfile, nationality: e.target.value})} 
-                className={`w-full bg-transparent border-b border-zinc-200 dark:border-zinc-700 font-bold outline-none focus:border-indigo-500 transition-colors appearance-none py-2 ${darkMode ? 'text-white' : 'text-zinc-900'}`}
-              >
-                {COUNTRIES.map(country => (
-                  <option key={country} value={country} className={darkMode ? 'bg-zinc-900' : 'bg-white'}>
-                    {country}
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none opacity-50">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/></svg>
+              <input 
+                value={countryQuery}
+                onChange={(e) => { setCountryQuery(e.target.value); setShowResults(true); }}
+                onFocus={() => setShowResults(true)}
+                className={`w-full bg-transparent border-b border-zinc-200 dark:border-zinc-700 font-bold outline-none focus:border-indigo-500 transition-colors py-2 ${darkMode ? 'text-white' : 'text-zinc-900'}`}
+                placeholder="Type to search..."
+              />
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none">
+                {isSearching ? (
+                  <svg className="w-4 h-4 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                ) : (
+                  <svg className="w-4 h-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                )}
               </div>
             </div>
+            
+            {showResults && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowResults(false)} />
+                {countryResults.length > 0 && (
+                  <div className={`absolute z-20 w-full mt-2 rounded-xl shadow-xl border max-h-60 overflow-y-auto animate-in fade-in zoom-in-95 duration-200 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
+                    {countryResults.map((c, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSelectCountry(c)}
+                        className={`w-full text-left px-4 py-3 text-sm font-bold transition-colors ${darkMode ? 'hover:bg-zinc-800 text-zinc-300' : 'hover:bg-zinc-50 text-zinc-700'}`}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </section>
 
