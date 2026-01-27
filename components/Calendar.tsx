@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useRef } from 'react';
-import { Trip, Language, CustomEvent, UserProfile } from '../types';
+import { Trip, Language, CustomEvent, UserProfile, ItineraryItem, FlightInfo } from '../types';
 import { translations } from '../translations';
 import { HOLIDAY_DATABASE } from '../services/holidayDatabase';
 import { GoogleService } from '../services/driveService';
@@ -143,22 +143,22 @@ const Calendar: React.FC<CalendarProps> = ({ trips, customEvents, language, dark
         const newStartDate = addDays(trip.startDate, diff);
         const newEndDate = addDays(trip.endDate, diff);
 
-        const newItinerary: Record<string, any[]> = {};
+        const newItinerary: Record<string, ItineraryItem[]> = {};
         Object.entries(trip.itinerary).forEach(([d, items]) => {
-            newItinerary[addDays(d, diff)] = items;
+            newItinerary[addDays(d, diff)] = items as ItineraryItem[];
         });
 
-        const newFlights: Record<string, any[]> = {};
+        const newFlights: Record<string, FlightInfo[]> = {};
         if (trip.flights) {
             Object.entries(trip.flights).forEach(([d, items]) => {
-                newFlights[addDays(d, diff)] = items;
+                newFlights[addDays(d, diff)] = items as FlightInfo[];
             });
         }
         
         const newDayRatings: Record<string, number> = {};
         if (trip.dayRatings) {
             Object.entries(trip.dayRatings).forEach(([d, r]) => {
-                newDayRatings[addDays(d, diff)] = r;
+                newDayRatings[addDays(d, diff)] = r as number;
             });
         }
 
