@@ -164,6 +164,9 @@ export const translations: Record<Language, any> = {
     addToItinerary: "Add to Itinerary",
     searching: "Searching...",
     hotels: "Hotels",
+    accommodation: "Accommodation",
+    addHotel: "Add Hotel",
+    autoFill: "Auto-Fill from URL",
     findHotels: "Find Hotels with AI",
     hotelPreferences: "Hotel Preferences",
     hotelPlaceholder: "e.g. Near station, under $150, has pool...",
@@ -173,7 +176,15 @@ export const translations: Record<Language, any> = {
     analyzingPlan: "Analyzing Trip Plan...",
     imageResolution: "Image Resolution",
     processing: "Processing...",
-    autoCover: "Auto Cover"
+    autoCover: "Auto Cover",
+    hotelUrl: "Hotel Website URL",
+    hotelName: "Hotel Name",
+    checkInTime: "Check-in Time",
+    checkOutTime: "Check-out Time",
+    roomType: "Room Type",
+    servicesIncluded: "Services Included",
+    notes: "Notes",
+    analyzingUrl: "Analyzing URL..."
   },
   'zh-TW': {
     journal: "日誌",
@@ -337,6 +348,9 @@ export const translations: Record<Language, any> = {
     addToItinerary: "加入行程",
     searching: "搜尋中...",
     hotels: "住宿",
+    accommodation: "住宿安排",
+    addHotel: "新增飯店",
+    autoFill: "網址自動填寫",
     findHotels: "✨ AI 智能找房",
     hotelPreferences: "住宿偏好",
     hotelPlaceholder: "例如：靠近車站、每晚 3000 元以下、有泳池...",
@@ -346,7 +360,15 @@ export const translations: Record<Language, any> = {
     analyzingPlan: "正在分析行程...",
     imageResolution: "圖片解析度",
     processing: "處理中...",
-    autoCover: "自動封面"
+    autoCover: "自動封面",
+    hotelUrl: "飯店網址",
+    hotelName: "飯店名稱",
+    checkInTime: "入住時間",
+    checkOutTime: "退房時間",
+    roomType: "房型",
+    servicesIncluded: "包含服務",
+    notes: "備註",
+    analyzingUrl: "分析網址中..."
   },
   ja: {
     journal: "日誌",
@@ -510,6 +532,9 @@ export const translations: Record<Language, any> = {
     addToItinerary: "日程に追加",
     searching: "検索中...",
     hotels: "宿泊",
+    accommodation: "宿泊施設",
+    addHotel: "ホテルを追加",
+    autoFill: "URLから自動入力",
     findHotels: "AIでホテルを探す",
     hotelPreferences: "希望条件",
     hotelPlaceholder: "例：駅近、1泊15000円以下、プール付き...",
@@ -519,7 +544,15 @@ export const translations: Record<Language, any> = {
     analyzingPlan: "旅程を分析中...",
     imageResolution: "画像解像度",
     processing: "処理中...",
-    autoCover: "自動カバー"
+    autoCover: "自動カバー",
+    hotelUrl: "ホテルのURL",
+    hotelName: "ホテル名",
+    checkInTime: "チェックイン時間",
+    checkOutTime: "チェックアウト時間",
+    roomType: "部屋タイプ",
+    servicesIncluded: "含まれるサービス",
+    notes: "メモ",
+    analyzingUrl: "URLを分析中..."
   },
   ko: {
     journal: "저널",
@@ -683,6 +716,9 @@ export const translations: Record<Language, any> = {
     addToItinerary: "일정에 추가",
     searching: "검색 중...",
     hotels: "숙소",
+    accommodation: "숙소",
+    addHotel: "호텔 추가",
+    autoFill: "URL 자동 입력",
     findHotels: "AI 숙소 추천",
     hotelPreferences: "숙소 선호도",
     hotelPlaceholder: "예: 역 근처, 1박 15만원 이하, 수영장...",
@@ -692,6 +728,14 @@ export const translations: Record<Language, any> = {
     analyzingPlan: "일정 분석 중...",
     imageResolution: "이미지 해상도",
     processing: "처리 중...",
-    autoCover: "자동 커버"
+    autoCover: "자동 커버",
+    hotelUrl: "호텔 웹사이트 URL",
+    hotelName: "호텔 이름",
+    checkInTime: "체크인 시간",
+    checkOutTime: "체크아웃 시간",
+    roomType: "객실 유형",
+    servicesIncluded: "포함된 서비스",
+    notes: "메모",
+    analyzingUrl: "URL 분석 중..."
   }
 };
