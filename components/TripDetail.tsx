@@ -1,9 +1,8 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, TourGuideData, Hotel } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, Hotel } from '../types';
 import { translations } from '../translations';
 import { GeminiService } from '../services/geminiService';
-import { GoogleService } from '../services/driveService';
 import { getExternalMapsUrl, getMapUrl } from '../services/mapsService';
 
 interface TripDetailProps {
@@ -16,10 +15,10 @@ interface TripDetailProps {
   userProfile: UserProfile;
 }
 
-const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, onBack, language, darkMode, userProfile }) => {
+const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, onBack, language, darkMode }) => {
   const t = translations[language];
-  const [activeTab, setActiveTab] = useState<'itinerary' | 'photos' | 'info'>('itinerary');
-  const [selectedDate, setSelectedDate] = useState<string>(Object.keys(trip.itinerary).sort()[0] || '');
+  const [activeTab, setActiveTab] = useState<'itinerary' | 'photos' | 'info' | 'accommodation'>('itinerary');
+  const [selectedDate, setSelectedDate] = useState<string>(Object.keys(trip.itinerary).sort()[0] || trip.startDate);
   const [showEventModal, setShowEventModal] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   
@@ -56,9 +55,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const [discoveryResults, setDiscoveryResults] = useState<any[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
 
-  // Hotel Recommendation State
+  // Hotel Recommendation & Management State
   const [hotelPreferences, setHotelPreferences] = useState('');
   const [isSearchingHotels, setIsSearchingHotels] = useState(false);
+  const [showHotelModal, setShowHotelModal] = useState(false);
+  const [hotelForm, setHotelForm] = useState<Partial<Hotel>>({});
+  const [hotelUrlInput, setHotelUrlInput] = useState('');
+  const [isAnalyzingUrl, setIsAnalyzingUrl] = useState(false);
+  const [editingHotelId, setEditingHotelId] = useState<string | null>(null);
 
   // Event Form State
   const [eventForm, setEventForm] = useState<Partial<ItineraryItem>>({
@@ -72,43 +76,30 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     url: ''
   });
 
-  const [aiLoading, setAiLoading] = useState(false);
-
+  // Ensure selectedDate is valid
   useEffect(() => {
-    // If selectedDate is not in the current trip's itinerary keys (e.g. after date shift), reset it
     const hasKeys = Object.keys(trip.itinerary).length > 0;
     if (hasKeys && (!selectedDate || !trip.itinerary[selectedDate])) {
        setSelectedDate(Object.keys(trip.itinerary).sort()[0]);
     } else if (!hasKeys) {
-       // If no itinerary, default to trip start date for context
        if (!selectedDate || selectedDate < trip.startDate || selectedDate > trip.endDate) {
          setSelectedDate(trip.startDate);
        }
     }
-  }, [trip.itinerary, trip.startDate, trip.endDate]);
+  }, [trip.itinerary, trip.startDate, trip.endDate, selectedDate]);
 
-  // Fetch Weather once on mount if dates are valid
+  // Fetch Weather - Fixed logic to ensure it runs
   useEffect(() => {
-    if (trip.startDate && trip.endDate && !weather) {
+    let isMounted = true;
+    if (trip.location && trip.startDate && trip.endDate) {
       GeminiService.getWeatherForecast(trip.location, trip.startDate, trip.endDate)
-        .then(res => setWeather(res))
+        .then(res => {
+          if (isMounted && res) setWeather(res);
+        })
         .catch(console.error);
     }
-  }, [trip.id]);
-
-  const handleTimeChange = (newTime: string) => {
-    setEventForm(prev => {
-      const updates: any = { time: newTime };
-      // Auto-suggest period if user sets a specific time, but allow override
-      if (newTime) {
-         const hour = parseInt(newTime.split(':')[0], 10);
-         if (hour < 12) updates.period = 'morning';
-         else if (hour < 18) updates.period = 'afternoon';
-         else updates.period = 'night';
-      }
-      return { ...prev, ...updates };
-    });
-  };
+    return () => { isMounted = false; };
+  }, [trip.location, trip.startDate, trip.endDate]);
 
   const handleSaveTitle = () => {
     onUpdate({ ...trip, title: titleInput });
@@ -117,21 +108,17 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
   const handleSaveDates = () => {
     if (!dateForm.start || !dateForm.end) return;
-
-    // Helper: Parse YYYY-MM-DD as UTC midnight to avoid timezone shift issues
+    
+    // Helper to calculate date difference
     const getUTCDate = (dateStr: string) => {
         const [y, m, d] = dateStr.split('-').map(Number);
         return new Date(Date.UTC(y, m - 1, d));
     };
-
     const oldStart = getUTCDate(trip.startDate);
     const newStart = getUTCDate(dateForm.start);
-    
-    // Calculate difference in days using UTC timestamps
     const diffTime = newStart.getTime() - oldStart.getTime();
     const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-
-    // Helper: Add days safely in UTC
+    
     const shiftDate = (dateStr: string, days: number): string => {
         const d = getUTCDate(dateStr);
         d.setUTCDate(d.getUTCDate() + days);
@@ -139,37 +126,28 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     };
 
     if (diffDays !== 0) {
-        // Shift Itinerary Keys
-        const newItinerary: Record<string, any[]> = {};
+        const newItinerary: Record<string, ItineraryItem[]> = {};
         Object.entries(trip.itinerary).forEach(([d, items]) => {
-            newItinerary[shiftDate(d, diffDays)] = items;
+            newItinerary[shiftDate(d, diffDays)] = items as ItineraryItem[];
         });
-
-        // Shift Flights Keys
-        const newFlights: Record<string, any[]> = {};
+        const newFlights: Record<string, FlightInfo[]> = {};
         if (trip.flights) {
             Object.entries(trip.flights).forEach(([d, items]) => {
-                newFlights[shiftDate(d, diffDays)] = items;
+                newFlights[shiftDate(d, diffDays)] = items as FlightInfo[];
             });
         }
-
-        // Shift Day Ratings
         const newDayRatings: Record<string, number> = {};
         if (trip.dayRatings) {
             Object.entries(trip.dayRatings).forEach(([d, r]) => {
-                newDayRatings[shiftDate(d, diffDays)] = r;
+                newDayRatings[shiftDate(d, diffDays)] = r as number;
             });
         }
-
-        // Shift Expenses
         const newExpenses = (trip.expenses || []).map(exp => ({
             ...exp,
             date: exp.date ? shiftDate(exp.date, diffDays) : exp.date
         }));
-
-        // Explicitly set the selected date to the NEW start date to update the view
+        
         setSelectedDate(dateForm.start);
-
         onUpdate({
             ...trip,
             startDate: dateForm.start,
@@ -180,14 +158,12 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
             expenses: newExpenses
         });
     } else {
-        // Just updating end date (duration change)
         onUpdate({
             ...trip,
             startDate: dateForm.start,
             endDate: dateForm.end
         });
     }
-
     setIsEditingDates(false);
   };
 
@@ -208,10 +184,9 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
   const handleSaveEvent = () => {
     if (!selectedDate || !eventForm.title) return;
-
-    // Use selected period. If explicitly set, respect it.
-    // If no period set, try to derive from time. Default to morning.
+    
     let finalPeriod = eventForm.period;
+    // If no period is explicitly selected, try to infer from time, otherwise default to morning
     if (!finalPeriod) {
         if (eventForm.time) {
             const hour = parseInt(eventForm.time.split(':')[0], 10);
@@ -227,7 +202,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       id: editingEventId || Date.now().toString(),
       title: eventForm.title || 'New Event',
       description: eventForm.description || '',
-      time: eventForm.time, // Can be empty string
+      time: eventForm.time || '', // Allow empty time string
       period: finalPeriod as 'morning' | 'afternoon' | 'night',
       type: eventForm.type || 'sightseeing',
       estimatedExpense: eventForm.estimatedExpense || 0,
@@ -235,38 +210,30 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       currency: trip.defaultCurrency,
       transportMethod: eventForm.transportMethod,
       url: eventForm.url,
-      // preserve existing expense parts if editing
       expenseParts: (editingEventId && trip.itinerary[selectedDate]?.find(i => i.id === editingEventId)?.expenseParts) || []
     };
 
     const currentItems = trip.itinerary[selectedDate] || [];
     let newItems;
-    
     if (editingEventId) {
       newItems = currentItems.map(item => item.id === editingEventId ? { ...item, ...newItem } : item);
     } else {
       newItems = [...currentItems, newItem];
     }
-    
-    // Sort by period rank then time
-    // Flexible events (no time) appear first within their period block
+
+    // Sort items
     const periodRank = { morning: 0, afternoon: 1, night: 2 };
     newItems.sort((a, b) => {
       const rankA = periodRank[a.period || 'morning'];
       const rankB = periodRank[b.period || 'morning'];
       if (rankA !== rankB) return rankA - rankB;
-      // If same period, sort by time string (empty strings first)
       return (a.time || '').localeCompare(b.time || '');
     });
 
     onUpdate({
       ...trip,
-      itinerary: {
-        ...trip.itinerary,
-        [selectedDate]: newItems
-      }
+      itinerary: { ...trip.itinerary, [selectedDate]: newItems }
     });
-
     setShowEventModal(false);
     setEditingEventId(null);
     setEventForm({ title: '', description: '', time: '', period: 'morning', type: 'sightseeing', estimatedExpense: 0 });
@@ -277,69 +244,33 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     const newItems = trip.itinerary[selectedDate].filter(i => i.id !== eventId);
     onUpdate({
       ...trip,
-      itinerary: {
-        ...trip.itinerary,
-        [selectedDate]: newItems
-      }
+      itinerary: { ...trip.itinerary, [selectedDate]: newItems }
     });
     if (selectedDiscoveryId === eventId) setSelectedDiscoveryId(null);
   };
 
   const handleEditEvent = (item: ItineraryItem) => {
     setEditingEventId(item.id);
-    setEventForm({ ...item, period: item.period || 'morning' }); // Ensure period is set
+    
+    // Infer period if missing but time exists, for legacy data compatibility
+    let initialPeriod = item.period;
+    if (!initialPeriod && item.time) {
+        const hour = parseInt(item.time.split(':')[0], 10);
+        if (hour >= 12 && hour < 18) initialPeriod = 'afternoon';
+        else if (hour >= 18) initialPeriod = 'night';
+        else initialPeriod = 'morning';
+    }
+
+    setEventForm({ ...item, period: initialPeriod || 'morning', time: item.time || '' });
     setShowEventModal(true);
-  };
-
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        if (ev.target?.result) {
-          const newPhoto: Photo = {
-            id: Date.now().toString(),
-            url: ev.target.result as string,
-            caption: 'New Memory',
-            date: new Date().toISOString(),
-            tags: [],
-            type: 'image'
-          };
-          onUpdate({ ...trip, photos: [newPhoto, ...trip.photos] });
-        }
-      };
-      reader.readAsDataURL(e.target.files[0]);
-    }
-  };
-
-  const openAiLogistics = async () => {
-    if (!eventForm.title) return;
-    setAiLoading(true);
-    try {
-      // Find previous event for logistics context
-      const currentItems = trip.itinerary[selectedDate] || [];
-      const prevItem = currentItems.length > 0 ? currentItems[currentItems.length - 1].title : null;
-
-      const logistics = await GeminiService.getEventLogistics(trip.location, eventForm as ItineraryItem, prevItem, language);
-      if (logistics) {
-        setEventForm(prev => ({
-          ...prev,
-          estimatedExpense: logistics.price !== undefined ? logistics.price : prev.estimatedExpense,
-          transportMethod: logistics.transportShort || prev.transportMethod,
-          description: (prev.description ? prev.description + '\n\n' : '') + `📍 Logistics: ${logistics.details || ''}`
-        }));
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setAiLoading(false);
-    }
   };
 
   const handleSmartRoute = async () => {
     setIsOptimizing(true);
     setSmartRoute(null);
     try {
-      const result = await GeminiService.getMapRoute(trip.location, trip.itinerary[selectedDate] || [], language);
+      const items = (trip.itinerary[selectedDate] || []) as ItineraryItem[];
+      const result = await GeminiService.getMapRoute(trip.location, items, language);
       setSmartRoute(result);
     } catch (e) {
       console.error(e);
@@ -352,7 +283,6 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const handleDiscoverNearby = async (category: string) => {
     const originEvent = trip.itinerary[selectedDate]?.find(i => i.id === selectedDiscoveryId);
     if (!originEvent) return;
-
     setIsDiscovering(true);
     setDiscoveryResults([]);
     try {
@@ -375,19 +305,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       estimatedExpense: place.estimatedExpense || 0,
       actualExpense: 0,
       currency: trip.defaultCurrency,
-      time: '', // User to set time
+      time: '', 
       period: 'afternoon'
     };
-    
     const currentItems = trip.itinerary[selectedDate] || [];
     const newItems = [...currentItems, newItem];
-    // Sort logic handled in next update or render
     onUpdate({
       ...trip,
-      itinerary: {
-        ...trip.itinerary,
-        [selectedDate]: newItems
-      }
+      itinerary: { ...trip.itinerary, [selectedDate]: newItems }
     });
     setShowDiscoveryModal(false);
   };
@@ -395,14 +320,9 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const handleFindHotels = async () => {
     setIsSearchingHotels(true);
     try {
-      const allItems = Object.values(trip.itinerary).flat();
-      const hotels = await GeminiService.recommendHotels(
-        trip.location, 
-        allItems, 
-        hotelPreferences, 
-        language
-      );
-      onUpdate({ ...trip, hotels });
+      const allItems = Object.values(trip.itinerary).flat() as ItineraryItem[];
+      const hotels = await GeminiService.recommendHotels(trip.location, allItems, hotelPreferences, language);
+      onUpdate({ ...trip, hotels: [...(trip.hotels || []), ...hotels] });
     } catch (e) {
       console.error("Hotel search failed", e);
       alert("Could not find hotels. Please try again.");
@@ -411,27 +331,75 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     }
   };
 
-  // --- Flight Handlers ---
-  const handleOpenFlightModal = (type: 'departure' | 'return' | 'complex', date?: string, index?: number) => {
-    setEditingFlightType(type);
-    if (type === 'complex' && date !== undefined && index !== undefined) {
-      setEditingComplexDate(date);
-      setEditingComplexIndex(index);
-      const flightsOnDate = trip.flights?.[date] || [];
-      const f = flightsOnDate[index];
-      setFlightForm(f || { code: '', gate: '', airport: '', transport: '' });
-    } else {
-      const existing = type === 'departure' ? trip.departureFlight : trip.returnFlight;
-      setFlightForm(existing || { code: '', gate: '', airport: '', transport: '' });
+  const handleHotelAutoFill = async () => {
+    if (!hotelUrlInput) return;
+    setIsAnalyzingUrl(true);
+    try {
+      const result = await GeminiService.extractHotelInfo(hotelUrlInput, language);
+      if (result) {
+         setHotelForm({
+           ...hotelForm,
+           ...result,
+           website: hotelUrlInput
+         });
+      }
+    } catch (e) {
+      console.error("Auto fill failed", e);
+      alert("Could not extract hotel info. Please fill manually.");
+    } finally {
+      setIsAnalyzingUrl(false);
     }
-    setShowFlightModal(true);
+  };
+
+  const handleSaveHotel = () => {
+    if (!hotelForm.name) return;
+    const newHotel: Hotel = {
+       id: editingHotelId || Math.random().toString(36).substr(2, 9),
+       name: hotelForm.name,
+       description: hotelForm.description || '',
+       address: hotelForm.address || '',
+       price: hotelForm.price || '',
+       rating: hotelForm.rating || 0,
+       amenities: hotelForm.amenities || [],
+       bookingUrl: hotelForm.bookingUrl,
+       checkIn: hotelForm.checkIn,
+       checkOut: hotelForm.checkOut,
+       roomType: hotelForm.roomType,
+       servicesIncluded: hotelForm.servicesIncluded,
+       notes: hotelForm.notes,
+       website: hotelForm.website
+    };
+
+    let updatedHotels = trip.hotels || [];
+    if (editingHotelId) {
+       updatedHotels = updatedHotels.map(h => h.id === editingHotelId ? newHotel : h);
+    } else {
+       updatedHotels = [...updatedHotels, newHotel];
+    }
+
+    onUpdate({ ...trip, hotels: updatedHotels });
+    setShowHotelModal(false);
+    setEditingHotelId(null);
+    setHotelForm({});
+    setHotelUrlInput('');
+  };
+
+  const handleDeleteHotel = (id: string) => {
+    if(window.confirm("Delete this hotel?")) {
+       onUpdate({ ...trip, hotels: (trip.hotels || []).filter(h => h.id !== id) });
+    }
+  };
+
+  const handleEditHotel = (hotel: Hotel) => {
+    setEditingHotelId(hotel.id);
+    setHotelForm(hotel);
+    setHotelUrlInput(hotel.website || hotel.bookingUrl || '');
+    setShowHotelModal(true);
   };
 
   const handleSaveFlight = () => {
     if (!editingFlightType) return;
-    
     const updatedTrip = { ...trip };
-    
     if (editingFlightType === 'departure') {
       updatedTrip.departureFlight = flightForm;
     } else if (editingFlightType === 'return') {
@@ -439,41 +407,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     } else if (editingFlightType === 'complex') {
       const flights = { ...(updatedTrip.flights || {}) };
       const list = [...(flights[editingComplexDate] || [])];
-      
       if (editingComplexIndex >= 0) {
         list[editingComplexIndex] = { ...list[editingComplexIndex], ...flightForm };
       }
-      
       flights[editingComplexDate] = list;
       updatedTrip.flights = flights;
     }
-    
     onUpdate(updatedTrip);
     setShowFlightModal(false);
-  };
-
-  const handleDeleteFlight = (type: 'departure' | 'return' | 'complex', date?: string, index?: number) => {
-    if (window.confirm("Are you sure you want to delete this flight details?")) {
-      const updatedTrip = { ...trip };
-      
-      if (type === 'departure') {
-        delete updatedTrip.departureFlight;
-      } else if (type === 'return') {
-        delete updatedTrip.returnFlight;
-      } else if (type === 'complex' && date && index !== undefined) {
-        const flights = { ...(updatedTrip.flights || {}) };
-        const list = [...(flights[date] || [])];
-        list.splice(index, 1);
-        if (list.length === 0) {
-          delete flights[date];
-        } else {
-          flights[date] = list;
-        }
-        updatedTrip.flights = flights;
-      }
-      
-      onUpdate(updatedTrip);
-    }
   };
 
   const sortedDates = Object.keys(trip.itinerary).sort();
@@ -606,7 +547,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
       {/* Tabs */}
       <div className="flex gap-2 mb-8 overflow-x-auto no-scrollbar">
-        {(['itinerary', 'photos', 'info'] as const).map(tab => (
+        {(['itinerary', 'accommodation', 'photos', 'info'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -615,6 +556,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
               : (darkMode ? 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800' : 'bg-white text-zinc-400 hover:bg-zinc-50')}`}
           >
             {tab === 'itinerary' && t.itinerary}
+            {tab === 'accommodation' && t.accommodation}
             {tab === 'photos' && t.tripAlbum}
             {tab === 'info' && t.flightDetails}
           </button>
@@ -642,7 +584,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
             ))}
           </div>
 
-          {/* Map & Weather Section - Collapsible */}
+          {/* Map & Weather Section */}
           <div className={`rounded-[2.5rem] overflow-hidden border-2 transition-all duration-500 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100 shadow-xl'}`}>
              <div 
                className="p-6 flex justify-between items-center cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
@@ -793,103 +735,98 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                )}
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Hotel Recommendation Section */}
-          <div className="pt-12 border-t border-zinc-100 dark:border-zinc-800">
-             <div className="flex flex-col gap-4">
-               <div className="flex items-center justify-between">
-                 <div>
-                   <h3 className="text-2xl font-black">{t.hotels}</h3>
-                   <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{t.recommendedHotels}</p>
-                 </div>
-                 {trip.hotels && trip.hotels.length > 0 && (
-                   <span className="bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
-                     {trip.hotels.length} Found
-                   </span>
-                 )}
-               </div>
+      {/* Accommodation Tab */}
+      {activeTab === 'accommodation' && (
+        <div className="space-y-8 animate-in fade-in duration-500">
+           
+           <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-2xl font-black">{t.accommodation}</h3>
+                <p className="text-xs font-bold opacity-50 uppercase tracking-widest">Manage your stays</p>
+              </div>
+              <button 
+                onClick={() => { setEditingHotelId(null); setHotelForm({}); setHotelUrlInput(''); setShowHotelModal(true); }}
+                className="bg-black dark:bg-white text-white dark:text-black px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:scale-105 transition-transform"
+              >
+                + {t.addHotel}
+              </button>
+           </div>
 
-               <div className={`p-6 rounded-[2.5rem] border-2 space-y-4 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-                  <div className="flex flex-col md:flex-row gap-4 items-stretch">
-                     <div className="flex-1">
-                        <label className="text-[10px] font-black uppercase tracking-widest opacity-50 ml-1 mb-2 block">{t.hotelPreferences}</label>
-                        <div className="relative">
-                          <input 
-                            value={hotelPreferences}
-                            onChange={(e) => setHotelPreferences(e.target.value)}
-                            placeholder={t.hotelPlaceholder}
-                            className={`w-full p-4 rounded-2xl font-bold outline-none border-2 transition-all ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
-                          />
-                          <div className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400">
-                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-                          </div>
-                        </div>
-                     </div>
-                     <button 
-                       onClick={handleFindHotels}
-                       disabled={isSearchingHotels}
-                       className="self-end px-8 py-4 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-700 hover:scale-105 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:hover:scale-100"
-                     >
-                       {isSearchingHotels ? (
-                         <>
-                           <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                           {t.analyzingPlan}
-                         </>
-                       ) : (
-                         <>
-                           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
-                           {t.findHotels}
-                         </>
-                       )}
-                     </button>
-                  </div>
-
-                  {trip.hotels && trip.hotels.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 animate-in fade-in slide-in-from-bottom-4">
-                       {trip.hotels.map((hotel) => (
-                         <div key={hotel.id} className={`p-5 rounded-2xl border flex flex-col gap-3 group relative overflow-hidden ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                            <div className="flex justify-between items-start">
-                               <div>
-                                  <h4 className="font-black text-lg leading-tight">{hotel.name}</h4>
-                                  <div className="flex items-center gap-1 mt-1">
-                                     <span className="text-yellow-500 text-xs">★</span>
-                                     <span className="text-xs font-bold">{hotel.rating}</span>
-                                     <span className="text-[10px] opacity-50 px-2">•</span>
-                                     <span className="text-xs opacity-60 font-bold">{hotel.price}</span>
-                                  </div>
-                               </div>
-                               <div className="p-2 bg-white dark:bg-zinc-800 rounded-xl shadow-sm">
-                                  <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-                               </div>
-                            </div>
-                            
-                            <p className="text-sm opacity-70 leading-relaxed italic border-l-2 border-indigo-500 pl-3">
-                               "{hotel.reason}"
-                            </p>
-
-                            <div className="flex flex-wrap gap-2 mt-auto pt-2">
-                               {hotel.amenities.map(tag => (
-                                 <span key={tag} className="px-2 py-1 rounded-md bg-zinc-200 dark:bg-zinc-800 text-[10px] font-bold uppercase tracking-wider opacity-70">
-                                   {tag}
-                                 </span>
-                               ))}
-                            </div>
-
-                            <a 
-                              href={hotel.bookingUrl || `https://www.google.com/travel/hotels?q=${encodeURIComponent(hotel.name + ' ' + trip.location)}`}
-                              target="_blank" 
-                              rel="noreferrer"
-                              className="mt-3 w-full py-3 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-black font-black text-xs uppercase tracking-widest text-center hover:scale-[1.02] active:scale-[0.98] transition-all"
-                            >
-                              {t.bookNow}
-                            </a>
+           {/* Saved Hotels List */}
+           {trip.hotels && trip.hotels.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {trip.hotels.map((hotel) => (
+                  <div key={hotel.id} className={`p-6 rounded-[2.5rem] border group relative overflow-hidden transition-all hover:shadow-xl ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                         <h4 className="font-black text-xl leading-tight mb-1">{hotel.name}</h4>
+                         <div className="flex items-center gap-2 text-xs font-bold opacity-60">
+                           {hotel.rating > 0 && <span className="text-yellow-500">★ {hotel.rating}</span>}
+                           {hotel.price && <span>• {hotel.price}</span>}
                          </div>
+                      </div>
+                      <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                         <button onClick={() => handleEditHotel(hotel)} className="p-2 bg-indigo-50 text-indigo-500 rounded-xl hover:bg-indigo-100"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg></button>
+                         <button onClick={() => handleDeleteHotel(hotel.id)} className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-100"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg></button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 text-sm">
+                       {hotel.checkIn && <div className="flex justify-between border-b border-dashed pb-1 border-opacity-20 border-gray-500"><span>Check-in:</span> <span className="font-bold">{hotel.checkIn}</span></div>}
+                       {hotel.checkOut && <div className="flex justify-between border-b border-dashed pb-1 border-opacity-20 border-gray-500"><span>Check-out:</span> <span className="font-bold">{hotel.checkOut}</span></div>}
+                       {hotel.roomType && <div className="flex justify-between border-b border-dashed pb-1 border-opacity-20 border-gray-500"><span>Room:</span> <span className="font-bold">{hotel.roomType}</span></div>}
+                    </div>
+
+                    {hotel.servicesIncluded && (
+                      <div className="mt-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 text-xs">
+                        <span className="font-bold block mb-1">Included:</span>
+                        {hotel.servicesIncluded}
+                      </div>
+                    )}
+
+                    {hotel.notes && (
+                       <p className="mt-4 text-xs opacity-60 italic">"{hotel.notes}"</p>
+                    )}
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                       {hotel.amenities.map(tag => (
+                         <span key={tag} className="px-2 py-1 rounded-md bg-zinc-100 dark:bg-zinc-800 text-[10px] font-bold uppercase tracking-wider opacity-70">{tag}</span>
                        ))}
                     </div>
-                  )}
-               </div>
-             </div>
-          </div>
+                  </div>
+                ))}
+              </div>
+           ) : (
+              <div className="text-center py-12 border-2 border-dashed rounded-[2.5rem] opacity-40">
+                <p className="font-bold">No hotels added yet.</p>
+              </div>
+           )}
+
+           {/* AI Recommendations Section */}
+           <div className={`p-6 rounded-[2.5rem] border-2 space-y-4 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
+              <h4 className="text-lg font-black">{t.findHotels}</h4>
+              <div className="flex flex-col md:flex-row gap-4">
+                 <div className="flex-1">
+                    <input 
+                      value={hotelPreferences}
+                      onChange={(e) => setHotelPreferences(e.target.value)}
+                      placeholder={t.hotelPlaceholder}
+                      className={`w-full p-4 rounded-2xl font-bold outline-none border-2 transition-all ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
+                    />
+                 </div>
+                 <button 
+                   onClick={handleFindHotels}
+                   disabled={isSearchingHotels}
+                   className="px-8 py-4 rounded-2xl bg-indigo-600 text-white font-black text-xs uppercase tracking-widest shadow-xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                 >
+                   {isSearchingHotels ? <span className="animate-spin">⏳</span> : '✨'}
+                   {isSearchingHotels ? t.analyzingPlan : t.findHotels}
+                 </button>
+              </div>
+           </div>
         </div>
       )}
 
@@ -945,48 +882,114 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         </div>
       )}
 
+      {/* Hotel Add/Edit Modal */}
+      {showHotelModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowHotelModal(false)} />
+          <div className={`relative w-full max-w-lg p-6 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+             <h3 className="text-2xl font-black mb-6">{editingHotelId ? 'Edit Hotel' : t.addHotel}</h3>
+             
+             {/* Auto-Fill Section */}
+             <div className={`p-4 rounded-2xl border-2 mb-6 space-y-3 ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
+                <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.hotelUrl}</label>
+                <div className="flex gap-2">
+                   <input 
+                     value={hotelUrlInput}
+                     onChange={e => setHotelUrlInput(e.target.value)}
+                     placeholder="https://..."
+                     className={`flex-1 p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-200'}`}
+                   />
+                   <button 
+                     onClick={handleHotelAutoFill}
+                     disabled={isAnalyzingUrl || !hotelUrlInput}
+                     className="px-4 bg-indigo-600 text-white rounded-xl font-black text-xs uppercase tracking-widest disabled:opacity-50"
+                   >
+                     {isAnalyzingUrl ? '...' : t.autoFill}
+                   </button>
+                </div>
+                <p className="text-[10px] opacity-50">Paste a hotel website or booking link to auto-fill details.</p>
+             </div>
+
+             <div className="space-y-4">
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.hotelName}</label>
+                   <input value={hotelForm.name || ''} onChange={e => setHotelForm({...hotelForm, name: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.checkInTime}</label>
+                     <input value={hotelForm.checkIn || ''} onChange={e => setHotelForm({...hotelForm, checkIn: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} placeholder="15:00" />
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.checkOutTime}</label>
+                     <input value={hotelForm.checkOut || ''} onChange={e => setHotelForm({...hotelForm, checkOut: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} placeholder="11:00" />
+                   </div>
+                </div>
+
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.roomType}</label>
+                   <input value={hotelForm.roomType || ''} onChange={e => setHotelForm({...hotelForm, roomType: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                </div>
+
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.servicesIncluded}</label>
+                   <input value={hotelForm.servicesIncluded || ''} onChange={e => setHotelForm({...hotelForm, servicesIncluded: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} placeholder="e.g. Breakfast, WiFi, Spa Access" />
+                </div>
+
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.notes}</label>
+                   <textarea value={hotelForm.notes || ''} onChange={e => setHotelForm({...hotelForm, notes: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 h-24 resize-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Price</label>
+                     <input value={hotelForm.price || ''} onChange={e => setHotelForm({...hotelForm, price: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                  </div>
+                  <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Rating</label>
+                     <input type="number" step="0.1" value={hotelForm.rating || ''} onChange={e => setHotelForm({...hotelForm, rating: parseFloat(e.target.value)})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button onClick={() => setShowHotelModal(false)} className="flex-1 py-3 bg-zinc-100 dark:bg-zinc-800 rounded-xl font-black uppercase text-xs">{t.cancel}</button>
+                  <button onClick={handleSaveHotel} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs shadow-lg">{t.save}</button>
+                </div>
+             </div>
+          </div>
+        </div>
+      )}
+
       {/* Flight Modal */}
       {showFlightModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowFlightModal(false)} />
           <div className={`relative w-full max-w-sm p-6 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
-             <h3 className="text-2xl font-black mb-6">{editingFlightType === 'departure' ? t.departure : (editingFlightType === 'return' ? t.return : t.flightDetails)}</h3>
+             <h3 className="text-2xl font-black mb-6">
+                {editingFlightType === 'departure' ? 'Departure Flight' : editingFlightType === 'return' ? 'Return Flight' : 'Flight Details'}
+             </h3>
              <div className="space-y-4">
                 <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.flightCode}</label>
-                   <input 
-                     value={flightForm.code} 
-                     onChange={e => setFlightForm({...flightForm, code: e.target.value})} 
-                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
-                   />
+                   <input value={flightForm.code} onChange={e => setFlightForm({...flightForm, code: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
                 </div>
                 <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.airport}</label>
-                   <input 
-                     value={flightForm.airport} 
-                     onChange={e => setFlightForm({...flightForm, airport: e.target.value})} 
-                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
-                   />
+                   <input value={flightForm.airport} onChange={e => setFlightForm({...flightForm, airport: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
                 </div>
                 <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.gate}</label>
-                   <input 
-                     value={flightForm.gate} 
-                     onChange={e => setFlightForm({...flightForm, gate: e.target.value})} 
-                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
-                   />
+                   <input value={flightForm.gate} onChange={e => setFlightForm({...flightForm, gate: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
                 </div>
                 <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.transport}</label>
-                   <input 
-                     value={flightForm.transport} 
-                     onChange={e => setFlightForm({...flightForm, transport: e.target.value})} 
-                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
-                   />
+                   <input value={flightForm.transport} onChange={e => setFlightForm({...flightForm, transport: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
                 </div>
-                <div className="pt-4 flex gap-3">
-                   <button onClick={() => setShowFlightModal(false)} className="flex-1 py-3 font-black uppercase text-xs rounded-xl bg-zinc-100 dark:bg-zinc-800">{t.cancel}</button>
-                   <button onClick={handleSaveFlight} className="flex-1 py-3 font-black uppercase text-xs rounded-xl bg-indigo-600 text-white shadow-lg">{t.save}</button>
+                <div className="flex gap-3 pt-4">
+                  <button onClick={() => setShowFlightModal(false)} className="flex-1 py-3 bg-zinc-100 dark:bg-zinc-800 rounded-xl font-black uppercase text-xs">{t.cancel}</button>
+                  <button onClick={handleSaveFlight} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs shadow-lg">{t.save}</button>
                 </div>
              </div>
           </div>
@@ -995,116 +998,82 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
       {/* Event Modal */}
       {showEventModal && (
-        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowEventModal(false)} />
-          <div className={`relative w-full max-w-lg p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 sm:zoom-in-95 max-h-[90vh] overflow-y-auto ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
-             <div className="flex justify-between items-center mb-6">
-               <h3 className="text-2xl font-black">{editingEventId ? t.updateEvent : t.addEvent}</h3>
-               <button onClick={openAiLogistics} disabled={aiLoading || !eventForm.title} className="text-xs font-black uppercase tracking-widest text-indigo-500 hover:text-indigo-600 flex items-center gap-1 disabled:opacity-50">
-                 {aiLoading ? <span className="animate-pulse">Thinking...</span> : '✨ Auto-Fill Logistics'}
-               </button>
-             </div>
-
+          <div className={`relative w-full max-w-lg p-6 rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
+             <h3 className="text-2xl font-black mb-6">{editingEventId ? t.updateEvent : t.addEvent}</h3>
+             
              <div className="space-y-4">
-                <div className="space-y-2">
+                <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.eventName}</label>
                    <input 
-                     placeholder="e.g. Visit Louvre Museum"
-                     value={eventForm.title}
-                     onChange={e => setEventForm({...eventForm, title: e.target.value})}
-                     className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                     value={eventForm.title} 
+                     onChange={e => setEventForm({...eventForm, title: e.target.value})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
                    />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Period Selector */}
-                  <div className="space-y-2">
-                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.period || 'Period'}</label>
-                     <select 
-                       value={eventForm.period}
-                       onChange={e => setEventForm({...eventForm, period: e.target.value as any})}
-                       className={`w-full p-4 rounded-2xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
-                     >
-                       <option value="morning">{t.morning}</option>
-                       <option value="afternoon">{t.afternoon}</option>
-                       <option value="night">{t.night}</option>
-                     </select>
-                  </div>
-
-                  {/* Exact Time (Optional) */}
-                  <div className="space-y-2 relative">
-                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.exactTime} (Optional)</label>
-                     <div className="relative">
-                       <input 
-                         type="time"
-                         value={eventForm.time}
-                         onChange={e => handleTimeChange(e.target.value)}
-                         className={`w-full p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
-                       />
-                       {eventForm.time && (
-                         <button 
-                           onClick={() => setEventForm({...eventForm, time: ''})}
-                           className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-rose-500 transition-colors"
-                           title="Clear specific time"
-                         >
-                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                         </button>
-                       )}
-                     </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.category}</label>
-                   <select 
-                     value={eventForm.type}
-                     onChange={e => setEventForm({...eventForm, type: e.target.value as any})}
-                     className={`w-full p-4 rounded-2xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                   >
-                     <option value="sightseeing">🏛️ Sightseeing</option>
-                     <option value="eating">🍱 Eating</option>
-                     <option value="shopping">🛍️ Shopping</option>
-                     <option value="transport">🚗 Transport</option>
-                     <option value="other">✨ Other</option>
-                   </select>
                 </div>
                 
-                 {/* Estimated Cost */}
-                 <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.estimated}</label>
-                    <div className="flex gap-4">
-                       <input 
-                         type="number"
-                         placeholder="0"
-                         value={eventForm.estimatedExpense === 0 ? '' : eventForm.estimatedExpense}
-                         onChange={e => setEventForm({...eventForm, estimatedExpense: parseFloat(e.target.value) || 0})}
-                         className={`flex-1 p-4 rounded-2xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
-                       />
-                       <div className={`w-20 flex items-center justify-center rounded-2xl border-2 font-black ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                          {trip.defaultCurrency || '$'}
-                       </div>
-                    </div>
-                 </div>
+                <div className="grid grid-cols-3 gap-3">
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.time}</label>
+                     <input 
+                       type="time" 
+                       value={eventForm.time || ''} 
+                       onChange={e => setEventForm({...eventForm, time: e.target.value})} 
+                       className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
+                     />
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.period}</label>
+                     <select 
+                       value={eventForm.period || 'morning'} 
+                       onChange={e => setEventForm({...eventForm, period: e.target.value as any})} 
+                       className={`w-full p-3 rounded-xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                     >
+                        <option value="morning">{t.morning}</option>
+                        <option value="afternoon">{t.afternoon}</option>
+                        <option value="night">{t.night}</option>
+                     </select>
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.category}</label>
+                     <select 
+                       value={eventForm.type} 
+                       onChange={e => setEventForm({...eventForm, type: e.target.value as any})} 
+                       className={`w-full p-3 rounded-xl font-bold outline-none border-2 appearance-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                     >
+                        <option value="sightseeing">Sightseeing</option>
+                        <option value="eating">Eating</option>
+                        <option value="shopping">Shopping</option>
+                        <option value="transport">Transport</option>
+                        <option value="other">Other</option>
+                     </select>
+                   </div>
+                </div>
 
-                 <div className="space-y-2">
-                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.briefDescription}</label>
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Notes / Description</label>
                    <textarea 
-                     rows={3}
-                     placeholder="Notes about this event..."
-                     value={eventForm.description}
-                     onChange={e => setEventForm({...eventForm, description: e.target.value})}
-                     className={`w-full p-4 rounded-2xl font-medium outline-none border-2 resize-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}
+                     value={eventForm.description} 
+                     onChange={e => setEventForm({...eventForm, description: e.target.value})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 h-24 resize-none ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
                    />
-                 </div>
-             </div>
+                </div>
 
-             <div className="mt-8 flex gap-3">
-               <button onClick={() => setShowEventModal(false)} className={`flex-1 py-4 rounded-2xl font-black uppercase text-xs tracking-widest ${darkMode ? 'bg-zinc-800' : 'bg-zinc-100'}`}>
-                 {t.cancel}
-               </button>
-               <button onClick={handleSaveEvent} className="flex-[2] py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl">
-                 {t.save}
-               </button>
+                <div className="space-y-1">
+                   <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.estimated} ({trip.defaultCurrency})</label>
+                   <input 
+                     type="number" 
+                     value={eventForm.estimatedExpense} 
+                     onChange={e => setEventForm({...eventForm, estimatedExpense: parseFloat(e.target.value) || 0})} 
+                     className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} 
+                   />
+                </div>
+
+                <div className="flex gap-3 pt-4">
+                  <button onClick={() => setShowEventModal(false)} className="flex-1 py-3 bg-zinc-100 dark:bg-zinc-800 rounded-xl font-black uppercase text-xs">{t.cancel}</button>
+                  <button onClick={handleSaveEvent} className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black uppercase text-xs shadow-lg">{t.save}</button>
+                </div>
              </div>
           </div>
         </div>
