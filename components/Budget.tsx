@@ -38,6 +38,10 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
 
   const [isSaving, setIsSaving] = useState(false);
 
+  // Budget Editing State
+  const [isEditingBudget, setIsEditingBudget] = useState(false);
+  const [tempBudget, setTempBudget] = useState('');
+
   const selectedTrip = trips.find(t => t.id === selectedTripId);
 
   // Consolidated Item Type for List
@@ -62,7 +66,7 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
 
     // 1. Itinerary Events
     Object.entries(selectedTrip.itinerary).forEach(([date, itineraryItems]) => {
-        itineraryItems.forEach(i => {
+        (itineraryItems as ItineraryItem[]).forEach(i => {
             items.push({
                 id: i.id,
                 title: i.title,
@@ -111,7 +115,7 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
     // 4. Complex Flights
     if (selectedTrip.flights) {
         Object.entries(selectedTrip.flights).forEach(([date, flightList]) => {
-            flightList.forEach((f, idx) => {
+            (flightList as any[]).forEach((f, idx) => {
                 items.push({
                     id: `flight-complex-${date}-${idx}`,
                     title: `Flight: ${f.code}`,
@@ -186,11 +190,6 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
   }, [allItems]);
 
   const handleEditItem = (item: BudgetItem) => {
-    // If it's a standalone expense, we treat it differently? 
-    // For now, let's allow basic editing via the same modal but disabling the breakdown.
-    // Or simpler: If standalone, show a simplified edit flow (not implemented for standalone edits in this prompt, assuming focus on input new).
-    // Actually, let's allow editing standalone expenses via the main modal, but map fields correctly.
-    
     setEditingItemId(item.id);
     setEditingItemType(item.itemType);
     
@@ -242,6 +241,21 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
     } catch (e) {
       console.error(`Failed to convert ${currency} to HKD`, e);
       return amount;
+    }
+  };
+
+  const handleStartEditBudget = () => {
+    if (selectedTrip) {
+      setTempBudget(selectedTrip.budget ? String(selectedTrip.budget) : '');
+      setIsEditingBudget(true);
+    }
+  };
+
+  const handleSaveBudget = async () => {
+    if (selectedTrip) {
+      const newBudget = await parseAndConvert(tempBudget);
+      onUpdateTrip({ ...selectedTrip, budget: newBudget });
+      setIsEditingBudget(false);
     }
   };
 
@@ -414,9 +428,34 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
         <div className="space-y-8">
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-             <div className={`p-6 rounded-[2.5rem] border ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100 shadow-sm'}`}>
-                <div className="text-[10px] font-black uppercase tracking-widest opacity-50 mb-2">{t.totalBudget}</div>
-                <div className="text-3xl font-black">HKD {stats.totalBudget.toLocaleString()}</div>
+             <div className={`p-6 rounded-[2.5rem] border relative group ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100 shadow-sm'}`}>
+                <div className="flex justify-between items-start">
+                  <div className="text-[10px] font-black uppercase tracking-widest opacity-50 mb-2">{t.totalBudget}</div>
+                  {!isEditingBudget && (
+                    <button 
+                      onClick={handleStartEditBudget}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl"
+                    >
+                      <svg className="w-4 h-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+                    </button>
+                  )}
+                </div>
+                {isEditingBudget ? (
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="text" 
+                      value={tempBudget} 
+                      onChange={(e) => setTempBudget(e.target.value)}
+                      placeholder="Amount"
+                      className={`w-full p-2 rounded-lg font-black text-xl outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-700' : 'bg-white border-zinc-200'}`}
+                      autoFocus
+                    />
+                    <button onClick={handleSaveBudget} className="p-2 bg-emerald-500 text-white rounded-lg hover:scale-105 transition-transform"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"/></svg></button>
+                    <button onClick={() => setIsEditingBudget(false)} className="p-2 bg-zinc-200 dark:bg-zinc-800 text-zinc-500 rounded-lg hover:scale-105 transition-transform"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12"/></svg></button>
+                  </div>
+                ) : (
+                  <div className="text-3xl font-black">HKD {stats.totalBudget.toLocaleString()}</div>
+                )}
              </div>
              <div className={`p-6 rounded-[2.5rem] border ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100 shadow-sm'}`}>
                 <div className="text-[10px] font-black uppercase tracking-widest opacity-50 mb-2">{t.totalSpent}</div>
@@ -603,80 +642,47 @@ const Budget: React.FC<BudgetProps> = ({ trips, language, darkMode, onUpdateTrip
                  )}
                </div>
 
-               {/* Detailed Breakdown - Only for Events, not simple expenses */}
+               {/* Sub-Expenses List (Only for Events) */}
                {editingItemType === 'event' && (
-                 <div className="space-y-3">
-                   <div className="flex justify-between items-center">
-                      <label className="text-[10px] font-black uppercase tracking-widest opacity-50">Bill Breakdown</label>
-                      <button 
-                        onClick={handleAddPart}
-                        className="text-[10px] font-black uppercase tracking-widest text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 px-2 py-1 rounded-lg transition-colors"
-                      >
-                        + Add Item
-                      </button>
-                   </div>
-                   
-                   <div className="space-y-2">
-                     {(editForm.expenseParts || []).map((part, index) => (
-                       <div key={part.id} className={`flex gap-2 items-center animate-in slide-in-from-left-2 transition-all ${part.isUncounted ? 'opacity-40 grayscale' : ''}`}>
-                         <button 
-                           onClick={() => handleUpdatePart(index, 'isUncounted', !part.isUncounted)}
-                           title="Cheat: Don't count this in total"
-                           className={`p-2.5 rounded-xl transition-all ${part.isUncounted ? 'bg-indigo-100 text-indigo-500' : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400'}`}
-                         >
-                           🙈
-                         </button>
-                         <input 
-                           placeholder="Item Name"
-                           value={part.label}
-                           onChange={(e) => handleUpdatePart(index, 'label', e.target.value)}
-                           className={`flex-[2] p-2.5 rounded-xl font-medium text-xs outline-none border ${part.isUncounted ? 'line-through' : ''} ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
-                         />
-                         <input 
-                           type="text"
-                           placeholder="0.00"
-                           value={part.amount}
-                           onChange={(e) => handleUpdatePart(index, 'amount', e.target.value)}
-                           className={`flex-1 p-2.5 rounded-xl font-bold text-xs outline-none border text-right ${part.isUncounted ? 'line-through' : ''} ${darkMode ? 'bg-zinc-950 border-zinc-800 focus:border-zinc-600' : 'bg-zinc-50 border-zinc-200 focus:border-zinc-300'}`}
-                         />
-                         <button 
-                           onClick={() => handleRemovePart(index)}
-                           className="p-2 text-rose-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors"
-                         >
-                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 12H4"/></svg>
-                         </button>
-                       </div>
-                     ))}
-                     {(editForm.expenseParts || []).length === 0 && (
-                       <div className="text-center py-4 border-2 border-dashed rounded-xl opacity-30">
-                         <p className="text-[10px] font-black uppercase">No breakdown added</p>
-                       </div>
-                     )}
-                   </div>
+                 <div className="space-y-4">
+                    <div className="flex justify-between items-center border-t pt-4 border-dashed border-gray-300 dark:border-gray-700">
+                       <h4 className="font-black text-sm uppercase tracking-widest">Split Items</h4>
+                       <button onClick={handleAddPart} className="text-xs font-bold text-indigo-500 hover:text-indigo-600">+ Add Item</button>
+                    </div>
+                    {editForm.expenseParts.length > 0 ? (
+                      <div className="space-y-2">
+                        {editForm.expenseParts.map((part, index) => (
+                          <div key={index} className="flex gap-2 items-center">
+                             <input 
+                               value={part.label} 
+                               onChange={e => handleUpdatePart(index, 'label', e.target.value)} 
+                               placeholder="Item Name" 
+                               className={`flex-1 p-2 rounded-lg text-xs font-bold border ${darkMode ? 'bg-zinc-900 border-zinc-700' : 'bg-white border-zinc-200'}`} 
+                             />
+                             <input 
+                               type="text"
+                               value={part.amount} 
+                               onChange={e => handleUpdatePart(index, 'amount', e.target.value)} 
+                               placeholder="Amt" 
+                               className={`w-20 p-2 rounded-lg text-xs font-bold border ${darkMode ? 'bg-zinc-900 border-zinc-700' : 'bg-white border-zinc-200'}`} 
+                             />
+                             <button onClick={() => handleRemovePart(index)} className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg">
+                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                             </button>
+                          </div>
+                        ))}
+                        <p className="text-[10px] opacity-50 text-right">Sum of items will overwrite Actual Cost.</p>
+                      </div>
+                    ) : (
+                      <p className="text-center text-xs opacity-40 italic">No split items added.</p>
+                    )}
                  </div>
                )}
-             </div>
 
-             <div className="mt-8 flex gap-3">
-               <button 
-                 onClick={() => setEditingItemId(null)} 
-                 disabled={isSaving}
-                 className={`flex-1 py-4 rounded-2xl font-black uppercase text-xs tracking-widest ${darkMode ? 'bg-zinc-800' : 'bg-zinc-100'} disabled:opacity-50`}
-               >
-                 Cancel
-               </button>
-               <button 
-                 onClick={handleSaveExpense} 
-                 disabled={isSaving}
-                 className="flex-[2] py-4 rounded-2xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest shadow-xl flex items-center justify-center gap-2 disabled:opacity-70"
-               >
-                 {isSaving ? (
-                   <>
-                     <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                     Converting...
-                   </>
-                 ) : 'Save Changes'}
-               </button>
+               <div className="flex gap-3 pt-4">
+                  <button onClick={() => setEditingItemId(null)} className="flex-1 py-3 font-black uppercase text-xs rounded-xl bg-zinc-100 dark:bg-zinc-800">{t.cancel}</button>
+                  <button onClick={handleSaveExpense} disabled={isSaving} className="flex-1 py-3 font-black uppercase text-xs rounded-xl bg-indigo-600 text-white shadow-lg disabled:opacity-70">{isSaving ? 'Saving...' : t.save}</button>
+               </div>
              </div>
           </div>
         </div>
