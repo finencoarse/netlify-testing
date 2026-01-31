@@ -866,7 +866,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                    setEditingFlightType('complex');
                    setEditingComplexDate(trip.startDate);
                    setEditingComplexIndex(-1);
-                   setFlightForm({ code: '', airport: '', gate: '', transport: '' });
+                   setFlightForm({ code: '', airport: '', gate: '', transport: '', departureTime: '', arrivalTime: '' });
                    setShowFlightModal(true);
                 }}
                 className="bg-black dark:bg-white text-white dark:text-black px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:scale-105 transition-transform"
@@ -896,6 +896,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.gate}</div>
                              <div className="font-bold">{trip.departureFlight.gate || 'N/A'}</div>
+                          </div>
+                          <div>
+                             <div className="text-xs opacity-50 uppercase tracking-widest">{t.depTime}</div>
+                             <div className="font-bold">{trip.departureFlight.departureTime || '-'}</div>
+                          </div>
+                          <div>
+                             <div className="text-xs opacity-50 uppercase tracking-widest">{t.arrTime}</div>
+                             <div className="font-bold">{trip.departureFlight.arrivalTime || '-'}</div>
                           </div>
                        </div>
                        <div>
@@ -938,6 +946,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                                 <div className="text-xs opacity-50 uppercase tracking-widest">{t.gate}</div>
                                 <div className="font-bold">{flight.gate || 'N/A'}</div>
                              </div>
+                             <div>
+                                <div className="text-xs opacity-50 uppercase tracking-widest">{t.depTime}</div>
+                                <div className="font-bold">{flight.departureTime || '-'}</div>
+                             </div>
+                             <div>
+                                <div className="text-xs opacity-50 uppercase tracking-widest">{t.arrTime}</div>
+                                <div className="font-bold">{flight.arrivalTime || '-'}</div>
+                             </div>
                           </div>
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.transport}</div>
@@ -968,6 +984,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.gate}</div>
                              <div className="font-bold">{trip.returnFlight.gate || 'N/A'}</div>
+                          </div>
+                          <div>
+                             <div className="text-xs opacity-50 uppercase tracking-widest">{t.depTime}</div>
+                             <div className="font-bold">{trip.returnFlight.departureTime || '-'}</div>
+                          </div>
+                          <div>
+                             <div className="text-xs opacity-50 uppercase tracking-widest">{t.arrTime}</div>
+                             <div className="font-bold">{trip.returnFlight.arrivalTime || '-'}</div>
                           </div>
                        </div>
                        <div>
@@ -1139,6 +1163,16 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                 <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.gate}</label>
                    <input value={flightForm.gate} onChange={e => setFlightForm({...flightForm, gate: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.depTime}</label>
+                     <input type="time" value={flightForm.departureTime || ''} onChange={e => setFlightForm({...flightForm, departureTime: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                   </div>
+                   <div className="space-y-1">
+                     <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.arrTime}</label>
+                     <input type="time" value={flightForm.arrivalTime || ''} onChange={e => setFlightForm({...flightForm, arrivalTime: e.target.value})} className={`w-full p-3 rounded-xl font-bold outline-none border-2 ${darkMode ? 'bg-zinc-950 border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`} />
+                   </div>
                 </div>
                 <div className="space-y-1">
                    <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.transport}</label>
