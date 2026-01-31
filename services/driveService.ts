@@ -28,44 +28,93 @@ export class GoogleService {
   static async init() {
     if (this.gapiInited && this.gisInited) return;
 
-    await new Promise<void>((resolve, reject) => {
-      if (window.gapi) {
-        window.gapi.load('client', async () => {
-          try {
-            await window.gapi.client.init({
-              // Note: We do not pass apiKey here because the Gemini API key (process.env.API_KEY)
-              // or Maps API key are often not valid for Drive/Calendar scopes, causing 400 errors.
-              // Authenticated requests will rely on the OAuth token.
-              discoveryDocs: [
-                "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest",
-                "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest"
-              ],
-            });
-            this.gapiInited = true;
-            resolve();
-          } catch (error: any) {
-            const msg = error?.result?.error?.message || error?.message || JSON.stringify(error);
-            reject(new Error(msg));
-          }
-        });
-      } else {
-        reject(new Error("Google API script not loaded"));
-      }
-    });
+    // Timeout helper to prevent indefinite hanging
+    const withTimeout = (promise: Promise<void>, ms: number, msg: string) => {
+        return Promise.race([
+            promise,
+            new Promise<void>((_, reject) => setTimeout(() => reject(new Error(msg)), ms))
+        ]);
+    };
 
-    await new Promise<void>((resolve, reject) => {
-      if (window.google) {
-        this.tokenClient = window.google.accounts.oauth2.initTokenClient({
-          client_id: this.getClientId(),
-          scope: SCOPES,
-          callback: '', 
-        });
-        this.gisInited = true;
-        resolve();
-      } else {
-        reject(new Error("Google Identity Services script not loaded"));
-      }
-    });
+    try {
+        await withTimeout(new Promise<void>((resolve, reject) => {
+          if (window.gapi) {
+            window.gapi.load('client', async () => {
+              try {
+                await window.gapi.client.init({
+                  discoveryDocs: [
+                    "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest",
+                    "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest"
+                  ],
+                });
+                this.gapiInited = true;
+                resolve();
+              } catch (error: any) {
+                const msg = error?.result?.error?.message || error?.message || JSON.stringify(error);
+                reject(new Error(msg));
+              }
+            });
+          } else {
+            // Check interval if script is loading but not ready
+            let retries = 0;
+            const interval = setInterval(() => {
+                if (window.gapi) {
+                    clearInterval(interval);
+                    window.gapi.load('client', async () => {
+                        try {
+                            await window.gapi.client.init({
+                                discoveryDocs: [
+                                    "https://www.googleapis.com/discovery/v1/apis/drive/v3/rest",
+                                    "https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest"
+                                ],
+                            });
+                            this.gapiInited = true;
+                            resolve();
+                        } catch (err: any) {
+                            reject(err);
+                        }
+                    });
+                } else if (retries++ > 20) {
+                    clearInterval(interval);
+                    reject(new Error("Google API script failed to load"));
+                }
+            }, 500);
+          }
+        }), 15000, "Google API initialization timed out");
+
+        await withTimeout(new Promise<void>((resolve, reject) => {
+          if (window.google) {
+            this.tokenClient = window.google.accounts.oauth2.initTokenClient({
+              client_id: this.getClientId(),
+              scope: SCOPES,
+              callback: '', 
+            });
+            this.gisInited = true;
+            resolve();
+          } else {
+             let retries = 0;
+             const interval = setInterval(() => {
+                 if (window.google) {
+                     clearInterval(interval);
+                     this.tokenClient = window.google.accounts.oauth2.initTokenClient({
+                         client_id: this.getClientId(),
+                         scope: SCOPES,
+                         callback: '',
+                     });
+                     this.gisInited = true;
+                     resolve();
+                 } else if (retries++ > 20) {
+                     clearInterval(interval);
+                     reject(new Error("Google Identity script failed to load"));
+                 }
+             }, 500);
+          }
+        }), 15000, "Google Identity initialization timed out");
+
+    } catch (e) {
+        console.error("Failed to initialize Google Services:", e);
+        throw e;
+    }
   }
 
   private static async validateToken(): Promise<void> {
