@@ -21,6 +21,18 @@ const DEFAULT_PROFILE: UserProfile = {
   isOnboarded: false
 };
 
+// Helper for safe localStorage parsing
+const safeParse = <T,>(key: string, fallback: T): T => {
+  const saved = localStorage.getItem(key);
+  if (!saved) return fallback;
+  try {
+    return JSON.parse(saved);
+  } catch (e) {
+    console.error(`Error parsing ${key} from localStorage`, e);
+    return fallback;
+  }
+};
+
 const App: React.FC = () => {
   const [language, setLanguage] = useState<Language>(() => {
     return (localStorage.getItem('wanderlust_lang') as Language) || 'en';
@@ -36,32 +48,25 @@ const App: React.FC = () => {
   });
 
   const [trips, setTrips] = useState<Trip[]>(() => {
-    const saved = localStorage.getItem('wanderlust_trips');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        return getInitialTrips(language);
-      }
+    const savedTrips = safeParse<Trip[]>('wanderlust_trips', []);
+    if (savedTrips.length === 0) {
+      return getInitialTrips(language);
     }
-    return getInitialTrips(language);
+    return savedTrips;
   });
   
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('wanderlust_profile');
-    return saved ? JSON.parse(saved) : DEFAULT_PROFILE;
+    return safeParse<UserProfile>('wanderlust_profile', DEFAULT_PROFILE);
   });
 
   const [customEvents, setCustomEvents] = useState<CustomEvent[]>(() => {
-    const saved = localStorage.getItem('wanderlust_events');
-    return saved ? JSON.parse(saved) : [];
+    return safeParse<CustomEvent[]>('wanderlust_events', []);
   });
 
   const [view, setView] = useState<ViewState>(() => {
-    const savedProfile = localStorage.getItem('wanderlust_profile');
-    if (savedProfile) {
-      const parsed = JSON.parse(savedProfile);
-      return parsed.isOnboarded ? 'dashboard' : 'onboarding';
+    const savedProfile = safeParse<UserProfile | null>('wanderlust_profile', null);
+    if (savedProfile && savedProfile.isOnboarded) {
+      return 'dashboard';
     }
     return 'onboarding';
   });
@@ -305,11 +310,11 @@ const App: React.FC = () => {
       rating: 0,
       dayRatings: {},
       favoriteDays: [],
-      budget: selectedTrips.reduce((sum, t) => sum + (t.budget || 0), 0),
       itinerary: selectedTrips.reduce((acc, t) => ({ ...acc, ...t.itinerary }), {}),
       flights: flightsMap,
       departureFlight: selectedTrips[0].departureFlight,
-      returnFlight: selectedTrips[selectedTrips.length - 1].returnFlight
+      returnFlight: selectedTrips[selectedTrips.length - 1].returnFlight,
+      budget: selectedTrips.reduce((sum, t) => sum + (t.budget || 0), 0)
     };
 
     handleSetTrips([...trips.filter(t => !selectedTripIds.includes(t.id)), combinedTrip]);
