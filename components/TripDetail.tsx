@@ -41,7 +41,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const [editingFlightType, setEditingFlightType] = useState<'departure' | 'return' | 'complex' | null>(null);
   const [editingComplexDate, setEditingComplexDate] = useState<string>('');
   const [editingComplexIndex, setEditingComplexIndex] = useState<number>(-1);
-  const [flightForm, setFlightForm] = useState<FlightInfo>({ code: '', airport: '', gate: '', transport: '' });
+  const [flightForm, setFlightForm] = useState<FlightInfo>({ code: '', airport: '', gate: '', transport: '', departureTime: '', arrivalTime: '' });
 
   // Map & AI State
   const [showMap, setShowMap] = useState(true);
@@ -899,11 +899,29 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                           </div>
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.depTime}</div>
-                             <div className="font-bold">{trip.departureFlight.departureTime || '-'}</div>
+                             <div className="font-bold">
+                               {trip.departureFlight.departureTime || (
+                                 <button 
+                                   onClick={() => { setEditingFlightType('departure'); setFlightForm(trip.departureFlight!); setShowFlightModal(true); }}
+                                   className="text-indigo-500 hover:text-indigo-600 hover:underline text-xs bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors"
+                                 >
+                                   + Set
+                                 </button>
+                               )}
+                             </div>
                           </div>
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.arrTime}</div>
-                             <div className="font-bold">{trip.departureFlight.arrivalTime || '-'}</div>
+                             <div className="font-bold">
+                               {trip.departureFlight.arrivalTime || (
+                                 <button 
+                                   onClick={() => { setEditingFlightType('departure'); setFlightForm(trip.departureFlight!); setShowFlightModal(true); }}
+                                   className="text-indigo-500 hover:text-indigo-600 hover:underline text-xs bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors"
+                                 >
+                                   + Set
+                                 </button>
+                               )}
+                             </div>
                           </div>
                        </div>
                        <div>
@@ -948,11 +966,29 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                              </div>
                              <div>
                                 <div className="text-xs opacity-50 uppercase tracking-widest">{t.depTime}</div>
-                                <div className="font-bold">{flight.departureTime || '-'}</div>
+                                <div className="font-bold">
+                                   {flight.departureTime || (
+                                     <button 
+                                       onClick={() => { setEditingFlightType('complex'); setEditingComplexDate(date); setEditingComplexIndex(idx); setFlightForm(flight); setShowFlightModal(true); }}
+                                       className="text-indigo-500 hover:text-indigo-600 hover:underline text-xs bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors"
+                                     >
+                                       + Set
+                                     </button>
+                                   )}
+                                </div>
                              </div>
                              <div>
                                 <div className="text-xs opacity-50 uppercase tracking-widest">{t.arrTime}</div>
-                                <div className="font-bold">{flight.arrivalTime || '-'}</div>
+                                <div className="font-bold">
+                                   {flight.arrivalTime || (
+                                     <button 
+                                       onClick={() => { setEditingFlightType('complex'); setEditingComplexDate(date); setEditingComplexIndex(idx); setFlightForm(flight); setShowFlightModal(true); }}
+                                       className="text-indigo-500 hover:text-indigo-600 hover:underline text-xs bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors"
+                                     >
+                                       + Set
+                                     </button>
+                                   )}
+                                </div>
                              </div>
                           </div>
                           <div>
@@ -987,11 +1023,29 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                           </div>
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.depTime}</div>
-                             <div className="font-bold">{trip.returnFlight.departureTime || '-'}</div>
+                             <div className="font-bold">
+                               {trip.returnFlight.departureTime || (
+                                 <button 
+                                   onClick={() => { setEditingFlightType('return'); setFlightForm(trip.returnFlight!); setShowFlightModal(true); }}
+                                   className="text-indigo-500 hover:text-indigo-600 hover:underline text-xs bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors"
+                                 >
+                                   + Set
+                                 </button>
+                               )}
+                             </div>
                           </div>
                           <div>
                              <div className="text-xs opacity-50 uppercase tracking-widest">{t.arrTime}</div>
-                             <div className="font-bold">{trip.returnFlight.arrivalTime || '-'}</div>
+                             <div className="font-bold">
+                               {trip.returnFlight.arrivalTime || (
+                                 <button 
+                                   onClick={() => { setEditingFlightType('return'); setFlightForm(trip.returnFlight!); setShowFlightModal(true); }}
+                                   className="text-indigo-500 hover:text-indigo-600 hover:underline text-xs bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors"
+                                 >
+                                   + Set
+                                 </button>
+                               )}
+                             </div>
                           </div>
                        </div>
                        <div>
