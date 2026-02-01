@@ -74,15 +74,25 @@ export interface StandaloneExpense {
   notes?: string;
 }
 
+export interface PlanningResource {
+  id: string;
+  title: string;
+  url: string;
+  image?: string; // Base64 screenshot or image URL
+  note?: string;
+}
+
 export interface ItineraryItem {
   id: string;
   time?: string; // HH:mm (Start Time)
   endTime?: string; // HH:mm (End Time)
   period?: 'morning' | 'afternoon' | 'night';
-  type: 'sightseeing' | 'shopping' | 'eating' | 'transport' | 'other';
+  type: 'sightseeing' | 'shopping' | 'eating' | 'transport' | 'other' | 'hotel';
   title: string;
   description: string;
+  address?: string; // Specific address for map
   url?: string;
+  screenshot?: string; // New field for event-specific screenshot
   estimatedExpense: number;
   actualExpense: number;
   currency?: string;
@@ -139,6 +149,7 @@ export interface Trip {
   defaultCurrency?: string;
   hotels?: Hotel[];
   expenses?: StandaloneExpense[];
+  resources?: PlanningResource[];
 }
 
 export type ViewState = 'onboarding' | 'dashboard' | 'trip-detail' | 'planner' | 'calendar' | 'budget' | 'editor' | 'settings';
