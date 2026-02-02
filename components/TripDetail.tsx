@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, Hotel } from '../types';
 import { translations } from '../translations';
 import { GeminiService } from '../services/geminiService';
+import { NominatimService } from '../services/nominatimService';
 import { getExternalMapsUrl, getMapUrl } from '../services/mapsService';
 
 interface TripDetailProps {
@@ -55,19 +56,18 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   // Map & AI State
   const [showMap, setShowMap] = useState(true);
   const [weather, setWeather] = useState<Record<string, { icon: string, temp: string, condition: string }> | null>(null);
-  const [smartRoute, setSmartRoute] = useState<{ text: string, links: { uri: string; title: string }[] } | null>(null);
-  const [isOptimizing, setIsOptimizing] = useState(false);
 
   // Map Search State
   const [mapSearchQuery, setMapSearchQuery] = useState('');
   const [mapSearchResult, setMapSearchResult] = useState<Partial<ItineraryItem> | null>(null);
   const [isSearchingMap, setIsSearchingMap] = useState(false);
 
+  // Optimization State
+  const [isOptimizing, setIsOptimizing] = useState(false);
+
   // Discover Nearby State
   const [selectedDiscoveryId, setSelectedDiscoveryId] = useState<string | null>(null);
   const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
-  const [discoveryResults, setDiscoveryResults] = useState<any[]>([]);
-  const [isDiscovering, setIsDiscovering] = useState(false);
 
   // Hotel Recommendation & Management State
   const [hotelPreferences, setHotelPreferences] = useState('');
@@ -78,7 +78,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   const [isAnalyzingUrl, setIsAnalyzingUrl] = useState(false);
   const [editingHotelId, setEditingHotelId] = useState<string | null>(null);
 
-  // Event Form State - Now includes 'date' and 'address'
+  // Event Form State - Now includes 'date', 'address', 'lat', 'lng'
   const [eventForm, setEventForm] = useState<Partial<ItineraryItem> & { date: string, address: string }>({
     title: '',
     address: '',
@@ -90,7 +90,9 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     estimatedExpense: 0,
     transportMethod: '',
     url: '',
-    screenshot: ''
+    screenshot: '',
+    lat: undefined,
+    lng: undefined
   });
 
   // Ensure selectedDate is valid
@@ -217,6 +219,8 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       id: editingEventId || Date.now().toString(),
       title: eventForm.title || 'New Event',
       address: eventForm.address || '',
+      lat: eventForm.lat,
+      lng: eventForm.lng,
       description: eventForm.description || '',
       time: eventForm.time || '', 
       period: finalPeriod as 'morning' | 'afternoon' | 'night',
@@ -259,7 +263,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     setShowEventModal(false);
     setEditingEventId(null);
     setEditingEventDate(null);
-    setEventForm({ title: '', address: '', description: '', time: '', date: eventForm.date, period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency, url: '', screenshot: '' });
+    setEventForm({ title: '', address: '', description: '', time: '', date: eventForm.date, period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency, url: '', screenshot: '', lat: undefined, lng: undefined });
   };
 
   const handleMoveEvent = (eventId: string, sourceDate: string, targetDate: string) => {
@@ -323,16 +327,117 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         period: initialPeriod || 'morning', 
         time: item.time || '',
         url: item.url || '',
-        screenshot: item.screenshot || ''
+        screenshot: item.screenshot || '',
+        lat: item.lat,
+        lng: item.lng
     });
     setShowEventModal(true);
+  };
+
+  // --- Optimization Logic ---
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // Radius of the earth in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2); 
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+    return R * c; // Distance in km
+  };
+
+  const handleOptimizeRoute = async () => {
+    const currentItems = trip.itinerary[selectedDate] || [];
+    if (currentItems.length < 2) return;
+
+    setIsOptimizing(true);
+
+    // Clone items to process them safely
+    const itemsToProcess = currentItems.map(i => ({ ...i }));
+
+    // 1. Geocode items missing coordinates
+    for (let i = 0; i < itemsToProcess.length; i++) {
+        const item = itemsToProcess[i];
+        if (item.lat === undefined || item.lng === undefined) {
+            const query = item.address || item.title;
+            if (query && item.type !== 'transport') { // Skip pure transport items if vague
+                try {
+                    // Fetch coords using the new Nominatim Service
+                    const result = await NominatimService.searchPlace(query, trip.location);
+                    if (result && result.lat !== undefined && result.lng !== undefined) {
+                        item.lat = result.lat;
+                        item.lng = result.lng;
+                        if (!item.address && result.address) {
+                            item.address = result.address;
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`Failed to geocode ${item.title}`);
+                }
+                // Small delay to respect Nominatim rate limits (1 req/sec recommended)
+                await new Promise(r => setTimeout(r, 800));
+            }
+        }
+    }
+
+    // 2. Filter items that have coordinates
+    const mappableItems = itemsToProcess.filter(item => item.lat !== undefined && item.lng !== undefined);
+    const unmappableItems = itemsToProcess.filter(item => item.lat === undefined || item.lng === undefined);
+
+    if (mappableItems.length < 2) {
+      alert("Could not determine locations for optimization. Please check your internet connection or ensure event names/addresses are accurate.");
+      setIsOptimizing(false);
+      return;
+    }
+
+    // 3. Nearest Neighbor Algorithm
+    // Attempt to start with the item closest to "Start" time or just the first item
+    // For simplicity, preserve the first mappable item as the start node to anchor the route
+    const startNode = mappableItems[0];
+    
+    let optimized = [startNode];
+    let remaining = mappableItems.filter(i => i.id !== startNode.id);
+
+    while (remaining.length > 0) {
+      const current = optimized[optimized.length - 1];
+      let nearestIndex = -1;
+      let minDist = Infinity;
+
+      remaining.forEach((item, index) => {
+        const dist = calculateDistance(current.lat!, current.lng!, item.lat!, item.lng!);
+        if (dist < minDist) {
+          minDist = dist;
+          nearestIndex = index;
+        }
+      });
+
+      if (nearestIndex !== -1) {
+        optimized.push(remaining[nearestIndex]);
+        remaining.splice(nearestIndex, 1);
+      } else {
+        break; 
+      }
+    }
+
+    // 4. Recombine (Mappable first, then others)
+    const newOrder = [...optimized, ...unmappableItems];
+
+    onUpdate({
+      ...trip,
+      itinerary: {
+        ...trip.itinerary,
+        [selectedDate]: newOrder
+      }
+    });
+    
+    setIsOptimizing(false);
   };
 
   // Drag and Drop Handlers
   const onDragStart = (e: React.DragEvent, id: string, date: string) => {
     e.dataTransfer.setData('text/plain', JSON.stringify({ id, date }));
     e.dataTransfer.effectAllowed = 'move';
-    // Small delay to let the ghost image form before changing style
     setTimeout(() => {
         // Optional: add a class to the dragged item if you want to hide it
     }, 0);
@@ -346,17 +451,15 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     }
 
     // Auto-scroll logic
-    const SCROLL_THRESHOLD = 150; // Pixels from edge
+    const SCROLL_THRESHOLD = 150;
     const MIN_SCROLL_SPEED = 5;
     const MAX_SCROLL_SPEED = 30;
 
     if (e.clientY < SCROLL_THRESHOLD) {
-      // Scroll Up
-      const intensity = (SCROLL_THRESHOLD - e.clientY) / SCROLL_THRESHOLD; // 0 to 1
+      const intensity = (SCROLL_THRESHOLD - e.clientY) / SCROLL_THRESHOLD;
       const speed = MIN_SCROLL_SPEED + (intensity * (MAX_SCROLL_SPEED - MIN_SCROLL_SPEED));
       window.scrollBy(0, -speed);
     } else if (e.clientY > window.innerHeight - SCROLL_THRESHOLD) {
-      // Scroll Down
       const intensity = (e.clientY - (window.innerHeight - SCROLL_THRESHOLD)) / SCROLL_THRESHOLD;
       const speed = MIN_SCROLL_SPEED + (intensity * (MAX_SCROLL_SPEED - MIN_SCROLL_SPEED));
       window.scrollBy(0, speed);
@@ -364,8 +467,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
   };
 
   const onDragLeave = (e: React.DragEvent) => {
-    // Only clear if leaving the container, this requires careful checking
-    // simpler: rely on onDragOver updating the date, and maybe onDrop clearing it
+    // Rely on onDragOver updating the date
   };
 
   const onDrop = (e: React.DragEvent, targetDate: string) => {
@@ -394,45 +496,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     }
   };
 
-  // ... (Other handlers unchanged: handleSmartRoute, handleDiscoverNearby, etc.)
-  const handleSmartRoute = async () => {
-    setIsOptimizing(true);
-    setSmartRoute(null);
-    try {
-      const items = (trip.itinerary[selectedDate] || []) as ItineraryItem[];
-      const result = await GeminiService.getMapRoute(trip.location, items, language);
-      setSmartRoute(result);
-    } catch (e) {
-      console.error(e);
-      alert('Could not generate smart route. Please try again.');
-    } finally {
-      setIsOptimizing(false);
-    }
-  };
-
-  const handleDiscoverNearby = async (category: string) => {
-    const originEvent = trip.itinerary[selectedDate]?.find(i => i.id === selectedDiscoveryId);
-    if (!originEvent) return;
-    setIsDiscovering(true);
-    setDiscoveryResults([]);
-    try {
-      const query = category === 'eating' ? 'restaurants' : category === 'shopping' ? 'shops' : 'attractions';
-      const results = await GeminiService.discoverPlaces(trip.location, `${query} near ${originEvent.title}`, language);
-      setDiscoveryResults(results);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsDiscovering(false);
-    }
-  };
-
-  // Map Search Handlers
+  // Map Search Handlers - REPLACED WITH NOMINATIM
   const handleMapSearch = async () => {
     if(!mapSearchQuery) return;
     setIsSearchingMap(true);
     setMapSearchResult(null);
     try {
-        const result = await GeminiService.findPlaceDetails(mapSearchQuery, trip.location, language);
+        // Use Nominatim Service instead of Gemini
+        const result = await NominatimService.searchPlace(mapSearchQuery, trip.location);
         if(result) setMapSearchResult(result);
     } catch(e) { console.error(e); }
     finally { setIsSearchingMap(false); }
@@ -451,32 +522,13 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         estimatedExpense: mapSearchResult.estimatedExpense || 0,
         currency: mapSearchResult.currency || trip.defaultCurrency,
         date: selectedDate,
-        time: '10:00' // default time
+        time: '10:00', // default time
+        lat: mapSearchResult.lat,
+        lng: mapSearchResult.lng
     });
     setMapSearchResult(null);
     setMapSearchQuery('');
     setShowEventModal(true);
-  };
-
-  const handleAddDiscovery = (place: any) => {
-    const newItem: ItineraryItem = {
-      id: Date.now().toString(),
-      title: place.title,
-      description: place.description || 'Discovered nearby',
-      type: place.type || 'sightseeing',
-      estimatedExpense: place.estimatedExpense || 0,
-      actualExpense: 0,
-      currency: trip.defaultCurrency,
-      time: '', 
-      period: 'afternoon'
-    };
-    const currentItems = trip.itinerary[selectedDate] || [];
-    const newItems = [...currentItems, newItem];
-    onUpdate({
-      ...trip,
-      itinerary: { ...trip.itinerary, [selectedDate]: newItems }
-    });
-    setShowDiscoveryModal(false);
   };
 
   const handleFindHotels = async () => {
@@ -583,7 +635,6 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     const start = new Date(trip.startDate);
     const end = new Date(trip.endDate);
     
-    // Safety check for invalid dates
     if (isNaN(start.getTime()) || isNaN(end.getTime())) return Object.keys(trip.itinerary).sort();
 
     const current = new Date(start);
@@ -667,11 +718,9 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
               )}
             </h4>
             <div className="flex gap-2 shrink-0">
-               {/* Date Tag */}
                <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400 whitespace-nowrap">
                  {new Date(dateContext).toLocaleDateString(undefined, {month:'short', day:'numeric'})}
                </span>
-               {/* Time Tag */}
                <span className="text-[10px] font-mono font-bold bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 px-2 py-1 rounded-lg whitespace-nowrap">
                  {item.time || 'Flexible'}
                </span>
@@ -882,14 +931,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                        </div>
                      )}
                      
-                     {/* Smart Map Search Bar */}
+                     {/* Smart Map Search Bar - Using Nominatim */}
                      <div className="px-6 pb-4">
                         <div className="flex gap-2">
                            <input 
                              value={mapSearchQuery}
                              onChange={(e) => setMapSearchQuery(e.target.value)}
                              onKeyDown={(e) => e.key === 'Enter' && handleMapSearch()}
-                             placeholder="Type a place name to add (e.g. Starbucks)..."
+                             placeholder="Search place to add (via OpenStreetMap)..."
                              className={`flex-1 p-3 rounded-xl font-bold text-xs outline-none border-2 transition-all ${darkMode ? 'bg-black border-zinc-800 focus:border-indigo-500' : 'bg-zinc-50 border-zinc-200 focus:border-indigo-500'}`}
                            />
                            <button 
@@ -926,38 +975,6 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                           src={getMapUrl(trip.location, itemsForMap)}
                         ></iframe>
                      </div>
-                     <div className="p-6 space-y-4">
-                        <div className="flex justify-between items-center">
-                           <h4 className="font-bold text-sm uppercase tracking-widest opacity-60">{t.smartRoute}</h4>
-                           <button 
-                             onClick={handleSmartRoute}
-                             disabled={isOptimizing}
-                             className="text-xs font-black text-indigo-500 hover:text-indigo-600 flex items-center gap-1 disabled:opacity-50"
-                           >
-                             {isOptimizing ? t.optimizing : '✨ Optimize Route'}
-                           </button>
-                        </div>
-                        {smartRoute && (
-                          <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-900/20 text-sm space-y-3 animate-in fade-in">
-                            <p className="leading-relaxed whitespace-pre-wrap">{smartRoute.text}</p>
-                            {smartRoute.links && smartRoute.links.length > 0 && (
-                              <div className="flex flex-wrap gap-2 pt-2">
-                                {smartRoute.links.map((link, i) => (
-                                  <a 
-                                    key={i} 
-                                    href={link.uri} 
-                                    target="_blank" 
-                                    rel="noreferrer"
-                                    className="px-3 py-1.5 rounded-lg bg-white dark:bg-indigo-900 text-indigo-600 dark:text-indigo-300 text-xs font-bold shadow-sm hover:shadow-md transition-all flex items-center gap-1"
-                                  >
-                                    📍 {link.title}
-                                  </a>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                     </div>
                    </div>
                  )}
               </div>
@@ -970,7 +987,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                     onClick={() => {
                       setEditingEventId(null);
                       setEditingEventDate(selectedDate);
-                      setEventForm({ title: '', address: '', description: '', time: '', date: selectedDate, period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency, url: '', screenshot: '' });
+                      setEventForm({ title: '', address: '', description: '', time: '', date: selectedDate, period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency, url: '', screenshot: '', lat: undefined, lng: undefined });
                       setShowEventModal(true);
                     }}
                     className="bg-black dark:bg-white text-white dark:text-black px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:scale-105 transition-transform"
@@ -1033,7 +1050,6 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
             <div className="space-y-12 animate-in fade-in">
                 {sortedDates.map((date) => {
                    const items = trip.itinerary[date] || [];
-                   // REMOVED: if (items.length === 0) return null;
                    
                    const isFirstDay = date === trip.startDate;
                    const activeHotel = trip.hotels && trip.hotels.length > 0 ? trip.hotels[0] : null;
@@ -1092,7 +1108,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                     onClick={() => {
                       setEditingEventId(null);
                       setEditingEventDate(sortedDates[0] || trip.startDate);
-                      setEventForm({ title: '', address: '', description: '', time: '', date: sortedDates[0] || trip.startDate, period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency, url: '', screenshot: '' });
+                      setEventForm({ title: '', address: '', description: '', time: '', date: sortedDates[0] || trip.startDate, period: 'morning', type: 'sightseeing', estimatedExpense: 0, currency: trip.defaultCurrency, url: '', screenshot: '', lat: undefined, lng: undefined });
                       setShowEventModal(true);
                     }}
                     className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl hover:bg-indigo-700 transition-all active:scale-95"
@@ -1103,7 +1119,21 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
             </div>
           )}
           
-          <div className="pt-4 flex justify-center">
+          <div className="pt-4 flex justify-center gap-3 flex-wrap">
+               <button
+                 onClick={handleOptimizeRoute}
+                 disabled={isOptimizing}
+                 className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-black text-xs uppercase tracking-widest hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors shadow-sm disabled:opacity-50"
+                 title="Reorders events by shortest distance (Requires items added via search)"
+               >
+                 {isOptimizing ? (
+                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                 ) : (
+                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                 )}
+                 {isOptimizing ? 'Optimizing...' : 'Optimize Order'}
+               </button>
+
                {selectedDiscoveryId ? (
                  <button
                    onClick={() => setShowDiscoveryModal(true)}
@@ -1130,7 +1160,6 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
       {/* Accommodation Tab */}
       {activeTab === 'accommodation' && (
         <div className="space-y-8 animate-in fade-in duration-500">
-           {/* ... existing code ... */}
            {/* Saved Hotels List */}
            {trip.hotels && trip.hotels.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1486,54 +1515,55 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         </div>
       )}
 
-      {/* Discovery Modal */}
+      {/* Discovery Modal - REPLACED WITH DIRECT LINKS */}
       {showDiscoveryModal && (
         <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDiscoveryModal(false)} />
           <div className={`relative w-full max-w-lg p-6 rounded-[2.5rem] shadow-2xl animate-in slide-in-from-bottom-10 sm:zoom-in-95 max-h-[90vh] overflow-y-auto ${darkMode ? 'bg-zinc-900' : 'bg-white'}`}>
              <h3 className="text-2xl font-black mb-6">{t.discoverNearby}</h3>
              
-             <div className="flex gap-2 mb-6">
-                {(['eating', 'sightseeing', 'shopping'] as const).map(cat => (
-                  <button 
-                    key={cat} 
-                    onClick={() => handleDiscoverNearby(cat)}
-                    disabled={isDiscovering}
-                    className={`flex-1 py-3 rounded-2xl border-2 font-black text-xs uppercase tracking-widest transition-all ${isDiscovering ? 'opacity-50' : 'hover:scale-105 active:scale-95'} ${darkMode ? 'border-zinc-700 hover:bg-zinc-800' : 'border-zinc-200 hover:bg-zinc-50'}`}
-                  >
-                    {cat === 'eating' && '🍱 Food'}
-                    {cat === 'sightseeing' && '🏛️ Sights'}
-                    {cat === 'shopping' && '🛍️ Shop'}
-                  </button>
-                ))}
-             </div>
+             <div className="grid grid-cols-1 gap-3">
+               <div className="p-4 rounded-xl bg-indigo-50 dark:bg-indigo-900/20 text-xs font-bold leading-relaxed border border-indigo-100 dark:border-indigo-900/30">
+                 Tap below to open Google Maps search in a new tab. Results are based on your current day's events or trip location.
+               </div>
+               
+               {['eating', 'sightseeing', 'shopping', 'cafes', 'bars'].map(cat => {
+                 // Determine context: Try to find a selected event, otherwise trip location
+                 let query = `${cat}`;
+                 let context = trip.location;
+                 
+                 // If an event is "selected" (expanded), search near it
+                 if (selectedDiscoveryId) {
+                   const evt = trip.itinerary[selectedDate]?.find(i => i.id === selectedDiscoveryId);
+                   if (evt) {
+                     context = evt.title; // Search near the event name
+                   }
+                 }
 
-             {isDiscovering ? (
-               <div className="py-12 flex flex-col items-center justify-center text-indigo-500">
-                 <div className="w-10 h-10 border-4 border-current border-t-transparent rounded-full animate-spin mb-4" />
-                 <p className="font-black text-xs uppercase tracking-widest">{t.searching}</p>
-               </div>
-             ) : (
-               <div className="space-y-3">
-                 {discoveryResults.map((place, i) => (
-                   <div key={i} className={`p-4 rounded-2xl border flex justify-between items-center ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
-                      <div>
-                        <div className="font-bold">{place.title}</div>
-                        <div className="text-xs opacity-60 max-w-[200px] truncate">{place.description}</div>
-                      </div>
-                      <button 
-                        onClick={() => handleAddDiscovery(place)}
-                        className="p-2 bg-indigo-600 text-white rounded-xl shadow-lg hover:bg-indigo-700 transition-colors"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
-                      </button>
-                   </div>
-                 ))}
-                 {discoveryResults.length === 0 && (
-                   <div className="text-center py-8 opacity-40 font-bold text-sm">Select a category to start exploring.</div>
-                 )}
-               </div>
-             )}
+                 return (
+                  <a
+                    key={cat}
+                    href={`https://www.google.com/maps/search/${cat}+near+${encodeURIComponent(context)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`flex items-center justify-between p-4 rounded-2xl border transition-all hover:scale-[1.02] active:scale-98 ${darkMode ? 'bg-black border-zinc-800 hover:border-zinc-600' : 'bg-white border-zinc-200 hover:shadow-lg'}`}
+                  >
+                    <span className="font-black text-sm uppercase tracking-widest flex items-center gap-3">
+                      {cat === 'eating' && '🍱 Find Food'}
+                      {cat === 'sightseeing' && '🏛️ Find Sights'}
+                      {cat === 'shopping' && '🛍️ Find Shops'}
+                      {cat === 'cafes' && '☕ Find Cafes'}
+                      {cat === 'bars' && '🍸 Find Bars'}
+                    </span>
+                    <svg className="w-5 h-5 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                  </a>
+                 );
+               })}
+             </div>
+             
+             <div className="mt-6 text-center">
+               <button onClick={() => setShowDiscoveryModal(false)} className="text-xs font-bold opacity-50 hover:opacity-100">Close</button>
+             </div>
           </div>
         </div>
       )}
