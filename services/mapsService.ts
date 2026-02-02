@@ -90,14 +90,19 @@ export const getMapUrl = (tripLocation: string, events: ItineraryItem[]): string
   
   // Resolve locations for each event
   const locations: string[] = events.map(e => {
-    // 1. Explicit Address (Highest priority)
+    // 1. Coordinates (Highest Priority - Exact Location)
+    if (e.lat !== undefined && e.lng !== undefined) {
+      return `${e.lat},${e.lng}`;
+    }
+
+    // 2. Explicit Address
     if (e.address && e.address.trim() !== '') return e.address;
 
-    // 2. Try to get precise location from URL
+    // 3. Try to get precise location from URL
     const urlLocation = extractLocationFromUrl(e.url);
     if (urlLocation) return urlLocation;
     
-    // 3. Fallback to Title + Trip Location context
+    // 4. Fallback to Title + Trip Location context
     if (e.title && e.title.trim() !== '') {
         // Simple heuristic: if title looks like a place, use it.
         return `${e.title}, ${tripLocation}`;
@@ -143,6 +148,7 @@ export const getMapUrl = (tripLocation: string, events: ItineraryItem[]): string
  */
 export const getExternalMapsUrl = (location: string, items: ItineraryItem[]): string => {
   const locations: string[] = items.map(e => {
+    if (e.lat !== undefined && e.lng !== undefined) return `${e.lat},${e.lng}`;
     if (e.address && e.address.trim() !== '') return e.address;
     const urlLocation = extractLocationFromUrl(e.url);
     if (urlLocation) return urlLocation;
