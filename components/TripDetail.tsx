@@ -4,7 +4,8 @@ import { Trip, ItineraryItem, Photo, Language, UserProfile, FlightInfo, Hotel } 
 import { translations } from '../translations';
 import { GeminiService } from '../services/geminiService';
 import { NominatimService } from '../services/nominatimService';
-import { getExternalMapsUrl, getMapUrl } from '../services/mapsService';
+import { GroqService } from '../services/groqService';
+import { getExternalMapsUrl, getMapUrl, extractLocationFromUrl } from '../services/mapsService';
 
 interface TripDetailProps {
   trip: Trip;
@@ -64,6 +65,8 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
   // Optimization State
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [optimizationStatus, setOptimizationStatus] = useState('');
+  const [routeSummary, setRouteSummary] = useState<string | null>(null);
 
   // Discover Nearby State
   const [selectedDiscoveryId, setSelectedDiscoveryId] = useState<string | null>(null);
@@ -106,6 +109,11 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
        }
     }
   }, [trip.itinerary, trip.startDate, trip.endDate, selectedDate]);
+
+  // Clear route summary when changing dates
+  useEffect(() => {
+    setRouteSummary(null);
+  }, [selectedDate]);
 
   // Fetch Weather
   useEffect(() => {
@@ -354,42 +362,85 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     if (currentItems.length < 2) return;
 
     setIsOptimizing(true);
+    setOptimizationStatus('Analyzing events...');
+    setRouteSummary(null);
 
     // Clone items to process them safely
     const itemsToProcess = currentItems.map(i => ({ ...i }));
+    const missingCoords = itemsToProcess.filter(i => i.lat === undefined || i.lng === undefined);
 
     // 1. Geocode items missing coordinates
     for (let i = 0; i < itemsToProcess.length; i++) {
         const item = itemsToProcess[i];
-        if (item.lat === undefined || item.lng === undefined) {
-            const query = item.address || item.title;
-            if (query && item.type !== 'transport') { // Skip pure transport items if vague
-                try {
-                    // Fetch coords using the new Nominatim Service
-                    const result = await NominatimService.searchPlace(query, trip.location);
-                    if (result && result.lat !== undefined && result.lng !== undefined) {
-                        item.lat = result.lat;
-                        item.lng = result.lng;
-                        if (!item.address && result.address) {
-                            item.address = result.address;
-                        }
+        if (item.lat !== undefined && item.lng !== undefined) continue;
+
+        if (missingCoords.length > 0) {
+           const idx = missingCoords.findIndex(mc => mc.id === item.id);
+           setOptimizationStatus(`Finding location ${idx + 1}/${missingCoords.length}: ${item.title.substring(0, 15)}...`);
+        }
+
+        // Try to extract from URL first (High confidence, specific)
+        const urlLoc = extractLocationFromUrl(item.url);
+        if (urlLoc) {
+             // Check if it's lat,lng pattern directly
+             const match = urlLoc.match(/^(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)$/);
+             if (match) {
+                 item.lat = parseFloat(match[1]);
+                 item.lng = parseFloat(match[3]);
+                 continue; // Found precise coords, skip nominatim
+             }
+        }
+
+        // Try multiple query strategies in order
+        const queries = [];
+        if (item.address) queries.push(item.address);
+        if (urlLoc) queries.push(urlLoc); // Extracted name/place from URL
+        if (item.title) queries.push(item.title);
+        // Try description if it's short (might contain address)
+        if (item.description && item.description.length < 100) queries.push(item.description);
+
+        if (item.type === 'transport') continue; // Skip vague transport items
+
+        let found = false;
+        for (const query of queries) {
+            if (!query) continue;
+            try {
+                // Fetch coords using the Nominatim Service
+                const result = await NominatimService.searchPlace(query, trip.location);
+                if (result && result.lat !== undefined && result.lng !== undefined) {
+                    item.lat = result.lat;
+                    item.lng = result.lng;
+                    if (!item.address && result.address) {
+                        item.address = result.address;
                     }
-                } catch (e) {
-                    console.warn(`Failed to geocode ${item.title}`);
+                    found = true;
                 }
-                // Small delay to respect Nominatim rate limits (1 req/sec recommended)
-                await new Promise(r => setTimeout(r, 800));
+            } catch (e) {
+                // Ignore and try next query
             }
+            
+            // STRICT RATE LIMITING: OpenStreetMap requires max 1 request per second.
+            // We sleep 1.1s to be safe and respectful to the free service.
+            await new Promise(r => setTimeout(r, 1100));
+            
+            if (found) break; 
+        }
+
+        if (!found) {
+            console.warn(`Failed to geocode ${item.title} after trying multiple sources.`);
         }
     }
+
+    setOptimizationStatus('Calculating route...');
 
     // 2. Filter items that have coordinates
     const mappableItems = itemsToProcess.filter(item => item.lat !== undefined && item.lng !== undefined);
     const unmappableItems = itemsToProcess.filter(item => item.lat === undefined || item.lng === undefined);
 
     if (mappableItems.length < 2) {
-      alert("Could not determine locations for optimization. Please check your internet connection or ensure event names/addresses are accurate.");
+      alert("Could not determine enough locations for optimization. Please ensure events have valid addresses, Google Maps URLs, or clear names.");
       setIsOptimizing(false);
+      setOptimizationStatus('');
       return;
     }
 
@@ -432,8 +483,17 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         [selectedDate]: newOrder
       }
     });
+
+    // 5. Generate Route Summary using Groq
+    if (newOrder.length > 0) {
+      setOptimizationStatus('Generating summary with Groq AI...');
+      const locations = newOrder.map(i => i.title);
+      const summary = await GroqService.generateRouteIntro(locations, language);
+      if (summary) setRouteSummary(summary);
+    }
     
     setIsOptimizing(false);
+    setOptimizationStatus('');
   };
 
   // Drag and Drop Handlers
@@ -998,6 +1058,24 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                   </button>
                 </div>
 
+                {/* Groq Route Summary */}
+                {routeSummary && (
+                  <div className="mx-2 p-4 rounded-2xl bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 animate-in fade-in slide-in-from-top-4">
+                    <div className="flex justify-between items-start gap-4">
+                      <div>
+                        <h4 className="font-black text-[10px] uppercase tracking-widest text-indigo-600 dark:text-indigo-400 mb-1 flex items-center gap-1">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                          Route Intro
+                        </h4>
+                        <p className="text-sm font-medium leading-relaxed opacity-80">{routeSummary}</p>
+                      </div>
+                      <button onClick={() => setRouteSummary(null)} className="p-1 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors">
+                        <svg className="w-4 h-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {itemsForMap.length === 0 ? (
                   <div className={`p-12 text-center rounded-[2.5rem] border-2 border-dashed ${darkMode ? 'border-zinc-800 text-zinc-600' : 'border-zinc-200 text-zinc-400'}`}>
                     <p className="font-bold">No events planned for this day.</p>
@@ -1126,14 +1204,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                  onClick={handleOptimizeRoute}
                  disabled={isOptimizing}
                  className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-black text-xs uppercase tracking-widest hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors shadow-sm disabled:opacity-50"
-                 title="Reorders events by shortest distance (Requires items added via search)"
+                 title="Reorders events by shortest distance. Uses OpenStreetMap."
                >
                  {isOptimizing ? (
                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                  ) : (
                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                  )}
-                 {isOptimizing ? 'Optimizing...' : 'Optimize Order'}
+                 {isOptimizing ? (optimizationStatus || 'Optimizing...') : 'Optimize Order'}
                </button>
 
                {selectedDiscoveryId ? (
