@@ -191,7 +191,6 @@ export const translations: Record<Language, any> = {
     viewTablet: "Tablet",
     depTime: "🛫 Takeoff",
     arrTime: "🛬 Landing",
-    // New Translations
     dayView: "Day View",
     overview: "Overview",
     mapAndWeather: "Map & Weather",
@@ -258,7 +257,24 @@ export const translations: Record<Language, any> = {
     warm: "Warm",
     cool: "Cool",
     flightDeparture: "Departure Flight",
-    flightReturn: "Return Flight"
+    flightReturn: "Return Flight",
+    // New Translations
+    syncConflict: "Sync Conflict",
+    conflictDescription: "Changes made on another device conflict with your local edits. Please review the trips below and select which version to keep.",
+    yours: "YOURS",
+    cloud: "CLOUD",
+    keepMine: "Keep Mine",
+    useCloud: "Use Cloud",
+    cancelSync: "Cancel Sync",
+    confirmMerge: "Confirm & Merge",
+    conflictsCount: "Conflicts",
+    analyzingEvents: "Analyzing events...",
+    findingLocation: "Finding location",
+    calculatingRoute: "Calculating route...",
+    generatingSummary: "Generating summary...",
+    optimizationError: "Could not determine enough locations for optimization. Please ensure events have valid addresses or names.",
+    tripDetails: "Trip Details",
+    resourcesTab: "Resources"
   },
   'zh-TW': {
     journal: "日誌",
@@ -449,7 +465,6 @@ export const translations: Record<Language, any> = {
     viewTablet: "平板",
     depTime: "🛫 起飛時間",
     arrTime: "🛬 降落時間",
-    // New Translations
     dayView: "日檢視",
     overview: "總覽",
     mapAndWeather: "地圖與天氣",
@@ -516,7 +531,24 @@ export const translations: Record<Language, any> = {
     warm: "暖色",
     cool: "冷色",
     flightDeparture: "去程航班",
-    flightReturn: "回程航班"
+    flightReturn: "回程航班",
+    // New Translations
+    syncConflict: "同步衝突",
+    conflictDescription: "其他裝置上的變更與您的本地編輯發生衝突。請檢視下方行程並選擇要保留的版本。",
+    yours: "您的版本",
+    cloud: "雲端版本",
+    keepMine: "保留我的",
+    useCloud: "使用雲端",
+    cancelSync: "取消同步",
+    confirmMerge: "確認並合併",
+    conflictsCount: "個衝突",
+    analyzingEvents: "正在分析活動...",
+    findingLocation: "正在搜尋地點",
+    calculatingRoute: "正在計算路線...",
+    generatingSummary: "正在生成摘要...",
+    optimizationError: "無法確定足夠的地點進行優化。請確保活動有有效的地址或名稱。",
+    tripDetails: "旅程詳情",
+    resourcesTab: "資源"
   },
   ja: {
     journal: "日誌",
@@ -707,7 +739,6 @@ export const translations: Record<Language, any> = {
     viewTablet: "タブレット",
     depTime: "🛫 出発時刻",
     arrTime: "🛬 到着時刻",
-    // New Translations
     dayView: "日別表示",
     overview: "概要",
     mapAndWeather: "地図と天気",
@@ -774,7 +805,24 @@ export const translations: Record<Language, any> = {
     warm: "ウォーム",
     cool: "クール",
     flightDeparture: "往路便",
-    flightReturn: "復路便"
+    flightReturn: "復路便",
+    // New Translations
+    syncConflict: "同期の競合",
+    conflictDescription: "他のデバイスでの変更がローカルの編集と競合しています。以下の旅行を確認し、保持するバージョンを選択してください。",
+    yours: "あなたの版",
+    cloud: "クラウド版",
+    keepMine: "自分を保持",
+    useCloud: "クラウドを使用",
+    cancelSync: "同期をキャンセル",
+    confirmMerge: "確認して統合",
+    conflictsCount: "件の競合",
+    analyzingEvents: "イベントを分析中...",
+    findingLocation: "場所を検索中",
+    calculatingRoute: "ルートを計算中...",
+    generatingSummary: "概要を生成中...",
+    optimizationError: "最適化のための十分な場所を特定できませんでした。有効な住所または名前があることを確認してください。",
+    tripDetails: "旅行詳細",
+    resourcesTab: "リソース"
   },
   ko: {
     journal: "저널",
@@ -965,7 +1013,6 @@ export const translations: Record<Language, any> = {
     viewTablet: "태블릿",
     depTime: "🛫 출발 시간",
     arrTime: "🛬 도착 시간",
-    // New Translations
     dayView: "일별 보기",
     overview: "개요",
     mapAndWeather: "지도 및 날씨",
@@ -1032,6 +1079,23 @@ export const translations: Record<Language, any> = {
     warm: "따뜻하게",
     cool: "차갑게",
     flightDeparture: "가는 편",
-    flightReturn: "오는 편"
+    flightReturn: "오는 편",
+    // New Translations
+    syncConflict: "동기화 충돌",
+    conflictDescription: "다른 기기에서의 변경 사항이 로컬 편집 내용과 충돌합니다. 아래 여행을 검토하고 유지할 버전을 선택하세요.",
+    yours: "내 버전",
+    cloud: "클라우드",
+    keepMine: "내 것 유지",
+    useCloud: "클라우드 사용",
+    cancelSync: "동기화 취소",
+    confirmMerge: "확인 및 병합",
+    conflictsCount: "개 충돌",
+    analyzingEvents: "이벤트 분석 중...",
+    findingLocation: "위치 검색 중",
+    calculatingRoute: "경로 계산 중...",
+    generatingSummary: "요약 생성 중...",
+    optimizationError: "최적화를 위한 충분한 위치를 확인할 수 없습니다. 유효한 주소나 이름이 있는지 확인하세요.",
+    tripDetails: "여행 세부 정보",
+    resourcesTab: "리소스"
   }
 };
