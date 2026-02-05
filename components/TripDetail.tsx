@@ -362,7 +362,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
     if (currentItems.length < 2) return;
 
     setIsOptimizing(true);
-    setOptimizationStatus('Analyzing events...');
+    setOptimizationStatus(t.analyzingEvents);
     setRouteSummary(null);
 
     // Clone items to process them safely
@@ -376,7 +376,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
         if (missingCoords.length > 0) {
            const idx = missingCoords.findIndex(mc => mc.id === item.id);
-           setOptimizationStatus(`Finding location ${idx + 1}/${missingCoords.length}: ${item.title.substring(0, 15)}...`);
+           setOptimizationStatus(`${t.findingLocation} ${idx + 1}/${missingCoords.length}: ${item.title.substring(0, 15)}...`);
         }
 
         // Try to extract from URL first (High confidence, specific)
@@ -431,14 +431,14 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
         }
     }
 
-    setOptimizationStatus('Calculating route...');
+    setOptimizationStatus(t.calculatingRoute);
 
     // 2. Filter items that have coordinates
     const mappableItems = itemsToProcess.filter(item => item.lat !== undefined && item.lng !== undefined);
     const unmappableItems = itemsToProcess.filter(item => item.lat === undefined || item.lng === undefined);
 
     if (mappableItems.length < 2) {
-      alert("Could not determine enough locations for optimization. Please ensure events have valid addresses, Google Maps URLs, or clear names.");
+      alert(t.optimizationError);
       setIsOptimizing(false);
       setOptimizationStatus('');
       return;
@@ -496,7 +496,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
 
     // 5. Generate Route Summary using Groq
     if (newOrder.length > 0) {
-      setOptimizationStatus('Generating summary with Groq AI...');
+      setOptimizationStatus(t.generatingSummary);
       const locations = newOrder.map(i => i.title);
       const summary = await GroqService.generateRouteIntro(locations, language);
       if (summary) setRouteSummary(summary);
@@ -1221,7 +1221,7 @@ const TripDetail: React.FC<TripDetailProps> = ({ trip, onUpdate, onEditPhoto, on
                  ) : (
                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                  )}
-                 {isOptimizing ? (optimizationStatus || 'Optimizing...') : t.optimizeOrder}
+                 {isOptimizing ? (optimizationStatus || t.optimizing) : t.optimizeOrder}
                </button>
 
                {selectedDiscoveryId ? (
