@@ -593,9 +593,9 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
                </div>
                <div>
-                 <h3 className="text-2xl font-black mb-1">Sync Conflict</h3>
+                 <h3 className="text-2xl font-black mb-1">{t.syncConflict}</h3>
                  <p className="text-sm opacity-60 leading-relaxed">
-                   Changes made on another device conflict with your local edits. Please review the trips below and select which version to keep.
+                   {t.conflictDescription}
                  </p>
                </div>
             </div>
@@ -611,7 +611,7 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                     <div key={tripId} className={`p-5 rounded-2xl border-2 transition-all ${darkMode ? 'bg-black border-zinc-800' : 'bg-zinc-50 border-zinc-200'}`}>
                        <h4 className="font-black text-lg mb-4 flex items-center gap-2">
                          ✈️ {tripTitle}
-                         <span className="text-[10px] px-2 py-1 bg-rose-500 text-white rounded-lg uppercase tracking-widest">{tripConflicts.length} Conflicts</span>
+                         <span className="text-[10px] px-2 py-1 bg-rose-500 text-white rounded-lg uppercase tracking-widest">{tripConflicts.length} {t.conflictsCount}</span>
                        </h4>
                        
                        <div className="space-y-3 mb-6">
@@ -620,11 +620,11 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                                 <span className="text-[10px] font-black uppercase tracking-widest opacity-50">{c.field}</span>
                                 <div className="grid grid-cols-2 gap-4">
                                    <div>
-                                      <div className="text-[10px] font-bold text-emerald-500 mb-0.5">YOURS</div>
+                                      <div className="text-[10px] font-bold text-emerald-500 mb-0.5">{t.yours}</div>
                                       <div className="font-medium opacity-80 break-words line-clamp-2">{c.localValue}</div>
                                    </div>
                                    <div>
-                                      <div className="text-[10px] font-bold text-indigo-500 mb-0.5">CLOUD</div>
+                                      <div className="text-[10px] font-bold text-indigo-500 mb-0.5">{t.cloud}</div>
                                       <div className="font-medium opacity-80 break-words line-clamp-2">{c.remoteValue}</div>
                                    </div>
                                 </div>
@@ -637,13 +637,13 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                             onClick={() => handleResolutionChange(tripId, 'local')}
                             className={`flex-1 py-3 rounded-lg text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${currentChoice === 'local' ? 'bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm ring-1 ring-black/5' : 'opacity-50 hover:opacity-100'}`}
                           >
-                            {currentChoice === 'local' && <span className="text-emerald-500">✓</span>} Keep Mine
+                            {currentChoice === 'local' && <span className="text-emerald-500">✓</span>} {t.keepMine}
                           </button>
                           <button 
                             onClick={() => handleResolutionChange(tripId, 'remote')}
                             className={`flex-1 py-3 rounded-lg text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${currentChoice === 'remote' ? 'bg-white dark:bg-zinc-700 text-black dark:text-white shadow-sm ring-1 ring-black/5' : 'opacity-50 hover:opacity-100'}`}
                           >
-                            {currentChoice === 'remote' && <span className="text-indigo-500">✓</span>} Use Cloud
+                            {currentChoice === 'remote' && <span className="text-indigo-500">✓</span>} {t.useCloud}
                           </button>
                        </div>
                     </div>
@@ -656,13 +656,13 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                  onClick={() => setShowConflictModal(false)} 
                  className={`flex-1 py-4 rounded-2xl font-black uppercase text-xs tracking-widest ${darkMode ? 'bg-zinc-800 hover:bg-zinc-700' : 'bg-zinc-100 hover:bg-zinc-200'}`}
                >
-                 Cancel Sync
+                 {t.cancelSync}
                </button>
                <button 
                  onClick={handleConfirmResolution}
                  className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:bg-indigo-700 active:scale-[0.98] transition-all"
                >
-                 Confirm & Merge
+                 {t.confirmMerge}
                </button>
             </div>
 
