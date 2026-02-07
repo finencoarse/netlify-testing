@@ -91,6 +91,8 @@ export interface ItineraryItem {
   title: string;
   description: string;
   address?: string; // Specific address for map
+  lat?: number; // Latitude for optimization
+  lng?: number; // Longitude for optimization
   url?: string;
   screenshot?: string; // New field for event-specific screenshot
   estimatedExpense: number;
@@ -108,6 +110,7 @@ export interface UserProfile {
   pfp: string;
   nationality: string;
   isOnboarded: boolean;
+  currency?: string;
 }
 
 export interface CustomEvent {
