@@ -9,11 +9,12 @@ interface DashboardProps {
   onUpdateTrip: (trip: Trip) => void;
   onDeleteTrip: (id: string) => void;
   onAddTrip?: (trip: Trip) => void;
+  onRequestNewJourney: () => void;
   language: Language;
   darkMode: boolean;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ trips, onOpenTrip, onUpdateTrip, onDeleteTrip, onAddTrip, language, darkMode }) => {
+const Dashboard: React.FC<DashboardProps> = ({ trips, onOpenTrip, onUpdateTrip, onDeleteTrip, onAddTrip, onRequestNewJourney, language, darkMode }) => {
   const t = translations[language];
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -176,8 +177,11 @@ const Dashboard: React.FC<DashboardProps> = ({ trips, onOpenTrip, onUpdateTrip, 
             <TripCard key={trip.id} trip={trip} />
           ))}
 
-          <div className="border-4 border-dashed border-zinc-200 dark:border-zinc-800 rounded-[2rem] aspect-[16/10] flex flex-col items-center justify-center p-8 text-center active:bg-zinc-100 dark:active:bg-zinc-900 transition-all cursor-pointer">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center mb-4 shadow-lg">
+          <div 
+            onClick={onRequestNewJourney}
+            className="border-4 border-dashed border-zinc-200 dark:border-zinc-800 rounded-[2rem] aspect-[16/10] flex flex-col items-center justify-center p-8 text-center active:bg-zinc-100 dark:active:bg-zinc-900 transition-all cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-900"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center mb-4 shadow-lg group-hover:scale-110 transition-transform">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" />
               </svg>
