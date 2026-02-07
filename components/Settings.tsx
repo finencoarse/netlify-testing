@@ -1,10 +1,10 @@
-
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Language, UserProfile, FontSize } from '../types';
 import { translations } from '../translations';
 import { getMapUsage } from '../services/mapsService';
 import { GeminiService } from '../services/geminiService';
 import { SupabaseService, ConflictItem } from '../services/supabaseService';
+import { COUNTRIES, CountryData } from '../data/countries';
 
 interface SettingsProps {
   language: Language;
@@ -28,7 +28,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
   const isCloudActive = SupabaseService.isCloudActive();
   const isHardcoded = SupabaseService.isHardcoded();
   
-  // Cloud Sync State
   const [syncId, setSyncId] = useState(() => localStorage.getItem('wanderlust_sync_id') || '');
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'success' | 'error' | 'merged'>('idle');
@@ -36,25 +35,20 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
   const [isEditingId, setIsEditingId] = useState(false);
   const [tempId, setTempId] = useState('');
 
-  // Conflict Resolution State
   const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
   const [remoteDataCache, setRemoteDataCache] = useState<any>(null);
   const [resolutionMap, setResolutionMap] = useState<Record<string, 'local' | 'remote'>>({});
   const [showConflictModal, setShowConflictModal] = useState(false);
 
-  // Custom Config State
   const [showConfig, setShowConfig] = useState(false);
   const [sbUrl, setSbUrl] = useState('');
   const [sbKey, setSbKey] = useState('');
 
-  // Country Search State
+  // Local Data Search
   const [countryQuery, setCountryQuery] = useState(userProfile.nationality);
-  const [countryResults, setCountryResults] = useState<string[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [countryResults, setCountryResults] = useState<CountryData[]>([]);
   const [showResults, setShowResults] = useState(false);
-  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Initialize inputs from storage
   useEffect(() => {
     const stored = localStorage.getItem('wanderlust_custom_supabase');
     if (stored) {
@@ -66,7 +60,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     }
   }, []);
 
-  // Generate a random ID if none exists
   useEffect(() => {
     if (!syncId) {
       const newId = Math.random().toString(36).substring(2, 10).toUpperCase();
@@ -75,12 +68,10 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     }
   }, [syncId]);
 
-  // Sync country query if profile updates externally
   useEffect(() => {
     setCountryQuery(userProfile.nationality);
   }, [userProfile.nationality]);
 
-  // Country Search Effect
   useEffect(() => {
     if (countryQuery === userProfile.nationality && !showResults) return;
 
@@ -89,30 +80,20 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
       return;
     }
 
-    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    const lowerQ = countryQuery.toLowerCase();
+    const results = COUNTRIES.filter(c => c.name.toLowerCase().includes(lowerQ));
+    setCountryResults(results);
+  }, [countryQuery, userProfile.nationality, showResults]);
 
-    setIsSearching(true);
-    searchTimeoutRef.current = setTimeout(async () => {
-      try {
-        const results = await GeminiService.searchCountries(countryQuery, language);
-        setCountryResults(results);
-        setShowResults(true);
-      } catch (error) {
-        console.error("Search failed", error);
-      } finally {
-        setIsSearching(false);
-      }
-    }, 600);
-
-    return () => {
-      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-    };
-  }, [countryQuery, language, userProfile.nationality, showResults]);
-
-  const handleSelectCountry = (country: string) => {
-    setUserProfile({ ...userProfile, nationality: country });
-    setCountryQuery(country);
+  const handleSelectCountry = (country: CountryData) => {
+    setCountryQuery(country.name);
     setShowResults(false);
+    // Instant update for both nationality and currency using static data
+    setUserProfile({ 
+      ...userProfile, 
+      nationality: country.name,
+      currency: country.currency 
+    });
   };
 
   const handlePfpUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -130,13 +111,11 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     setIsSyncing(true);
     setSyncStatus('idle');
     try {
-      // 1. Check for conflicts
       const { conflicts: foundConflicts, remoteData } = await SupabaseService.checkForConflicts(syncId, fullData);
       
       if (foundConflicts.length > 0) {
           setConflicts(foundConflicts);
           setRemoteDataCache(remoteData);
-          // Initialize resolution map (default to local preference)
           const initialMap: Record<string, 'local' | 'remote'> = {};
           foundConflicts.forEach(c => initialMap[c.tripId] = 'local');
           setResolutionMap(initialMap);
@@ -146,7 +125,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
           return;
       }
 
-      // 2. No conflicts, perform standard sync
       await performSync(remoteData, {}); 
     } catch (e) {
       console.error(e);
@@ -171,7 +149,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
         alert("Sync successful! Changes have been merged.");
         setTimeout(() => setSyncStatus('idle'), 3000);
         
-        // Clear conflict state
         setShowConflictModal(false);
         setConflicts([]);
         setRemoteDataCache(null);
@@ -285,14 +262,21 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const json = JSON.parse(event.target?.result as string);
-        if (window.confirm(t.importConfirm || "Overwrite current data with this file?")) {
+        const target = event.target as FileReader;
+        const result = target?.result;
+        if (typeof result !== 'string') return;
+
+        const json = JSON.parse(result);
+        const confirmMsg = (t?.importConfirm as string) || "Overwrite current data with this file?";
+        if (window.confirm(confirmMsg)) {
           onImportData(json);
-          alert(t.importSuccess || "Import successful!");
+          const successMsg = (t?.importSuccess as string) || "Import successful!";
+          alert(successMsg);
         }
       } catch (err) {
         console.error(err);
-        alert(t.importError || "Invalid file format");
+        const errorMsg = (t?.importError as string) || "Invalid file format";
+        alert(errorMsg);
       }
     };
     reader.readAsText(file);
@@ -310,7 +294,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         
-        {/* Profile Section */}
         <section className={`p-6 rounded-[2rem] border-2 space-y-6 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
           <h3 className="text-xl font-black">{t.myProfile}</h3>
           <div className="flex items-center gap-6">
@@ -342,11 +325,7 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                 placeholder="Type to search..."
               />
               <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none">
-                {isSearching ? (
-                  <svg className="w-4 h-4 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                ) : (
-                  <svg className="w-4 h-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                )}
+                <svg className="w-4 h-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
               </div>
             </div>
             
@@ -359,9 +338,10 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                       <button
                         key={i}
                         onClick={() => handleSelectCountry(c)}
-                        className={`w-full text-left px-4 py-3 text-sm font-bold transition-colors ${darkMode ? 'hover:bg-zinc-800 text-zinc-300' : 'hover:bg-zinc-50 text-zinc-700'}`}
+                        className={`w-full text-left px-4 py-3 text-sm font-bold transition-colors flex items-center justify-between ${darkMode ? 'hover:bg-zinc-800 text-zinc-300' : 'hover:bg-zinc-50 text-zinc-700'}`}
                       >
-                        {c}
+                        <span>{c.name} {c.flag}</span>
+                        <span className="text-xs opacity-50 font-mono bg-zinc-200 dark:bg-zinc-700 px-2 py-0.5 rounded">{c.currency}</span>
                       </button>
                     ))}
                   </div>
@@ -369,9 +349,22 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
               </>
             )}
           </div>
+
+          <div className="space-y-2">
+             <label className="text-[10px] font-black uppercase tracking-widest opacity-50">{t.currency}</label>
+             <div className="relative">
+                <input 
+                    value={userProfile.currency || 'USD'} 
+                    readOnly
+                    className="w-full bg-transparent border-b border-zinc-200 dark:border-zinc-700 font-bold outline-none text-zinc-400 cursor-not-allowed transition-colors py-2 uppercase"
+                />
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] opacity-40">
+                    (Auto-set by Country)
+                </div>
+             </div>
+          </div>
         </section>
 
-        {/* Appearance Section */}
         <section className={`p-6 rounded-[2rem] border-2 space-y-6 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
           <h3 className="text-xl font-black">{t.appearance}</h3>
           
@@ -419,7 +412,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
           </div>
         </section>
 
-        {/* Cloud Sync Section */}
         <section className={`p-6 rounded-[2rem] border-2 space-y-6 md:col-span-2 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
           <div className="flex items-center justify-between">
              <div className="flex items-center gap-3">
@@ -503,7 +495,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
           </div>
         </section>
 
-        {/* Data Management Section (Manual Export/Import) */}
         <section className={`p-6 rounded-[2rem] border-2 space-y-6 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
           <h3 className="text-xl font-black">Data Management</h3>
           <div className="grid grid-cols-2 gap-4">
@@ -522,7 +513,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
           </div>
         </section>
 
-        {/* API Stats Section */}
         <section className={`p-6 rounded-[2rem] border-2 space-y-4 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
           <h3 className="text-xl font-black">{t.apiUsage}</h3>
           <div className="space-y-3">
@@ -537,7 +527,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
           </div>
         </section>
         
-        {/* Custom Config Section */}
         {!isHardcoded && (
            <section className={`p-6 rounded-[2rem] border-2 space-y-4 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
              <div className="flex justify-between items-center">
@@ -582,7 +571,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
 
       </div>
 
-      {/* Conflict Resolution Modal */}
       {showConflictModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-in fade-in duration-300">
           <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowConflictModal(false)} />
@@ -601,7 +589,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
             </div>
 
             <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-               {/* Group conflicts by Trip for clearer UI */}
                {Array.from(new Set(conflicts.map(c => c.tripId))).map(tripId => {
                   const tripConflicts = conflicts.filter(c => c.tripId === tripId);
                   const tripTitle = tripConflicts[0].tripTitle;
