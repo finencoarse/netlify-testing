@@ -174,10 +174,10 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
     setIsSyncing(true);
     try {
       const targetId = inputSyncId.trim().toUpperCase();
-      const data = await SupabaseService.loadGlobalBackup(targetId);
-      if (data) {
+      const result = await SupabaseService.loadGlobalBackup(targetId);
+      if (result && result.data) {
         if (window.confirm(`Found backup for ID "${targetId}"! \n\nThis will overwrite your current local data and link your app to this ID for future backups.\n\nContinue?`)) {
-          onImportData(data);
+          onImportData(result.data);
           setSyncId(targetId);
           localStorage.setItem('wanderlust_sync_id', targetId);
           alert(`Restore successful! \nYour Sync ID is now: ${targetId}.`);
@@ -216,9 +216,9 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
 
     setIsSyncing(true); 
     try {
-      const existingData = await SupabaseService.loadGlobalBackup(newId);
+      const existing = await SupabaseService.loadGlobalBackup(newId);
       let confirmMsg = `Switch Sync ID to "${newId}"?`;
-      if (existingData) {
+      if (existing) {
         confirmMsg = `⚠️ WARNING: ID ALREADY IN USE\n\nThe ID "${newId}" already has cloud data associated with it.\n\nIf you switch to this ID and click 'Backup Now', you will OVERWRITE the existing data.\n\nOnly proceed if this is YOUR ID.`;
       } else {
         confirmMsg += `\n\nThis ID appears to be available.`;
@@ -267,15 +267,16 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
         if (typeof result !== 'string') return;
 
         const json = JSON.parse(result);
-        const confirmMsg = (t?.importConfirm as string) || "Overwrite current data with this file?";
+        // Fix for Type Error: Ensure messages are strings
+        const confirmMsg = typeof t?.importConfirm === 'string' ? t.importConfirm : "Overwrite current data with this file?";
         if (window.confirm(confirmMsg)) {
           onImportData(json);
-          const successMsg = (t?.importSuccess as string) || "Import successful!";
+          const successMsg = typeof t?.importSuccess === 'string' ? t.importSuccess : "Import successful!";
           alert(successMsg);
         }
       } catch (err) {
         console.error(err);
-        const errorMsg = (t?.importError as string) || "Invalid file format";
+        const errorMsg = typeof t?.importError === 'string' ? t.importError : "Invalid file format";
         alert(errorMsg);
       }
     };
@@ -492,24 +493,6 @@ const Settings: React.FC<SettingsProps> = ({ language, setLanguage, darkMode, se
                 Restoring will replace your current Sync ID with the one above.
               </p>
             </div>
-          </div>
-        </section>
-
-        <section className={`p-6 rounded-[2rem] border-2 space-y-6 ${darkMode ? 'bg-zinc-900 border-zinc-800' : 'bg-white border-zinc-100'}`}>
-          <h3 className="text-xl font-black">Data Management</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <button 
-              onClick={handleExportFile}
-              className="py-4 px-4 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-black text-xs uppercase tracking-widest hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors flex flex-col items-center gap-2"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-              {t.exportData || "Export JSON"}
-            </button>
-            <label className="py-4 px-4 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-black text-xs uppercase tracking-widest hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors flex flex-col items-center gap-2 cursor-pointer">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m-4 0h12"/></svg>
-              {t.importData || "Import JSON"}
-              <input type="file" className="hidden" accept=".json" onChange={handleImportFile} />
-            </label>
           </div>
         </section>
 
